@@ -19,10 +19,10 @@ members = [
     "launch/*",
     "lib/llm",
     "lib/runtime",
-    "lib/bindings/c",
-    "lib/engines/*",
 ]
 resolver = "3"
+# "lib/bindings/c",
+# "lib/engines/*",
 
 [workspace.package]
 version = "0.1.1"

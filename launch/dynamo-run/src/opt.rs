@@ -137,20 +137,20 @@ impl TryFrom<&str> for Output {
 
     fn try_from(s: &str) -> anyhow::Result<Self> {
         match s {
-            #[cfg(feature = "mistralrs")]
-            "mistralrs" => Ok(Output::MistralRs),
+            // #[cfg(feature = "mistralrs")]
+            // "mistralrs" => Ok(Output::MistralRs),
 
             #[cfg(feature = "sglang")]
             "sglang" => Ok(Output::SgLang),
 
-            #[cfg(feature = "llamacpp")]
-            "llamacpp" | "llama_cpp" => Ok(Output::LlamaCpp),
+            // #[cfg(feature = "llamacpp")]
+            // "llamacpp" | "llama_cpp" => Ok(Output::LlamaCpp),
 
             #[cfg(feature = "vllm")]
             "vllm" => Ok(Output::Vllm),
 
-            #[cfg(feature = "trtllm")]
-            "trtllm" => Ok(Output::TrtLLM),
+            // #[cfg(feature = "trtllm")]
+            // "trtllm" => Ok(Output::TrtLLM),
 
             "echo_full" => Ok(Output::EchoFull),
             "echo_core" => Ok(Output::EchoCore),

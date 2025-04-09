@@ -227,19 +227,19 @@ pub async fn run(
             let endpoint: Endpoint = path.parse()?;
             EngineConfig::Dynamic(endpoint)
         }
-        #[cfg(feature = "mistralrs")]
-        Output::MistralRs => {
-            let Some(model_path) = model_path else {
-                anyhow::bail!("out=mistralrs requires flag --model-path=<full-path-to-model-gguf>");
-            };
-            let Some(model_name) = model_name else {
-                unreachable!("We checked model_path earlier, and set model_name from model_path");
-            };
-            EngineConfig::StaticFull {
-                service_name: model_name,
-                engine: dynamo_engine_mistralrs::make_engine(&model_path).await?,
-            }
-        }
+        // #[cfg(feature = "mistralrs")]
+        // Output::MistralRs => {
+        //     let Some(model_path) = model_path else {
+        //         anyhow::bail!("out=mistralrs requires flag --model-path=<full-path-to-model-gguf>");
+        //     };
+        //     let Some(model_name) = model_name else {
+        //         unreachable!("We checked model_path earlier, and set model_name from model_path");
+        //     };
+        //     EngineConfig::StaticFull {
+        //         service_name: model_name,
+        //         engine: dynamo_engine_mistralrs::make_engine(&model_path).await?,
+        //     }
+        // }
         #[cfg(feature = "sglang")]
         Output::SgLang => {
             let Some(model_path) = model_path else {
@@ -364,27 +364,27 @@ pub async fn run(
                 EngineConfig::None
             }
         }
-        #[cfg(feature = "llamacpp")]
-        Output::LlamaCpp => {
-            let Some(model_path) = model_path else {
-                anyhow::bail!("out=llamacpp requires flag --model-path=<full-path-to-model-gguf>");
-            };
-            if !model_path.is_file() {
-                anyhow::bail!("--model-path should refer to a GGUF file. llama_cpp does not support safetensors.");
-            }
-            let Some(card) = maybe_card.clone() else {
-                anyhow::bail!(
-                    "Pass --model-config so we can find the tokenizer, should be an HF checkout."
-                );
-            };
-            let engine =
-                dynamo_engine_llamacpp::make_engine(cancel_token.clone(), &model_path).await?;
-            EngineConfig::StaticCore {
-                service_name: card.service_name.clone(),
-                engine,
-                card: Box::new(card),
-            }
-        }
+        // #[cfg(feature = "llamacpp")]
+        // Output::LlamaCpp => {
+        //     let Some(model_path) = model_path else {
+        //         anyhow::bail!("out=llamacpp requires flag --model-path=<full-path-to-model-gguf>");
+        //     };
+        //     if !model_path.is_file() {
+        //         anyhow::bail!("--model-path should refer to a GGUF file. llama_cpp does not support safetensors.");
+        //     }
+        //     let Some(card) = maybe_card.clone() else {
+        //         anyhow::bail!(
+        //             "Pass --model-config so we can find the tokenizer, should be an HF checkout."
+        //         );
+        //     };
+        //     let engine =
+        //         dynamo_engine_llamacpp::make_engine(cancel_token.clone(), &model_path).await?;
+        //     EngineConfig::StaticCore {
+        //         service_name: card.service_name.clone(),
+        //         engine,
+        //         card: Box::new(card),
+        //     }
+        // }
         #[cfg(feature = "trtllm")]
         Output::TrtLLM => {
             let Some(model_path) = model_path else {
