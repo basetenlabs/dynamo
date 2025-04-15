@@ -17,7 +17,7 @@
 # Build the TRT-LLM base image.
 
 # This script builds the TRT-LLM base image for Dynamo with TensorRT-LLM.
-TRTLLM_COMMIT=0d4d50a745
+TRTLLM_COMMIT=fffb403125
 
 while getopts "c:" opt; do
   case ${opt} in
@@ -45,4 +45,4 @@ git submodule update --init --recursive
 git lfs pull
 
 # Build the TRT-LLM base image.
-make -C docker release_build)
+make -C docker release_build CUDA_ARCHS="90-real;100-real")
