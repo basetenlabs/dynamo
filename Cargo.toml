@@ -22,7 +22,8 @@ members = [
     "lib/bindings/c",
     "lib/engines/vllm",
     "lib/engines/sglang",
-    "lib/engines/mistralrs",
+    "lib/engines/python",
+    # "lib/engines/mistralrs",
 ]
 resolver = "3"
 
