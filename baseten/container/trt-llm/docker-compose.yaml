@@ -1,0 +1,22 @@
+version: '3.8'
+services:
+  frontend:
+    network_mode: "host"
+    image: baseten/dynamo-test:tensorrtllm-latest
+    command: ["sleep","infinity"]
+    # command: ["uv", "run", "dynamo", "serve", "--service-name", "Frontend", "examples.tensorrt_llm.graphs.agg_router:Frontend", "-f", "examples/tensorrt_llm/configs/agg_router.yaml"]
+  # router:
+  #   network_mode: "host"
+  #   image: baseten/dynamo-test:tensorrtllm-latest
+  #   command: ["uv", "run", "dynamo", "serve", "--service-name", "Router", "examples.tensorrt_llm.graphs.agg_router:Router", "-f", "examples/tensorrt_llm/configs/agg_router.yaml"]
+  # processor:
+  #   network_mode: "host"
+  #   image: baseten/dynamo-test:tensorrtllm-latest
+  #   command: ["uv", "run", "dynamo", "serve", "--service-name", "Processor", "examples.tensorrt_llm.graphs.agg_router:Processor", "-f", "examples/tensorrt_llm/configs/agg_router.yaml"]
+  # trt-worker:
+  #   network_mode: "host"
+  #   image: baseten/dynamo-test:tensorrtllm-latest
+  #   command: ["uv", "run", "dynamo", "serve", "--service-name", "TensorRTLLMWorker", "examples.tensorrt_llm.graphs.agg_router:TensorRTLLMWorker", "-f", "examples/tensorrt_llm/configs/agg_router.yaml"]
+  #   runtime: nvidia
+  #   environment:
+  #     - NVIDIA_VISIBLE_DEVICES=all

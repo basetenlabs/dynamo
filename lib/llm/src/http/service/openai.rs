@@ -16,6 +16,7 @@
 use axum::{
     extract::State,
     http::StatusCode,
+    http::HeaderMap,
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -120,6 +121,26 @@ impl From<HttpError> for ErrorResponse {
     }
 }
 
+fn extract_request_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    let billing_id = headers
+        .get("X-Baseten-Billing-Org-Id")
+        .and_then(|h| h.to_str().ok())
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Missing required header: X-Baseten-Billing-Org-Id".to_string(),
+            }),
+        ))?;
+    
+    let request_suffix = headers
+        .get("X-Baseten-Request-Id")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_owned())  // Use map to convert &str -> String
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    Ok(format!("{}--{}", billing_id, request_suffix))
+}
+
 /// OpenAI Completions Request Handler
 ///
 /// This method will handle the incoming request for the `/v1/completions endpoint`. The endpoint is a "source"
@@ -131,14 +152,19 @@ impl From<HttpError> for ErrorResponse {
 #[tracing::instrument(skip_all)]
 async fn completions(
     State(state): State<Arc<DeploymentState>>,
+    headers: HeaderMap,
     Json(request): Json<CompletionRequest>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     // return a 503 if the service is not ready
     check_ready(&state)?;
 
     // todo - extract distributed tracing id and context id from headers
-    let request_id = uuid::Uuid::new_v4().to_string();
-
+    let request_id = match extract_request_id(&headers) {
+        Ok(request_id) => request_id,
+        Err(err) => return Err(err),
+    };
+    
+    tracing::info!("request_id: {request_id}");
     // todo - decide on default
     let streaming = request.inner.stream.unwrap_or(false);
 
@@ -217,13 +243,18 @@ async fn completions(
 #[tracing::instrument(skip_all)]
 async fn chat_completions(
     State(state): State<Arc<DeploymentState>>,
+    headers: HeaderMap,
     Json(request): Json<NvCreateChatCompletionRequest>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     // return a 503 if the service is not ready
     check_ready(&state)?;
 
     // todo - extract distributed tracing id and context id from headers
-    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_id = match extract_request_id(&headers) {
+        Ok(request_id) => request_id,
+        Err(err) => return Err(err),
+    };
+    tracing::info!("request_id: {request_id}");
 
     // todo - decide on default
     let streaming = request.inner.stream.unwrap_or(false);
