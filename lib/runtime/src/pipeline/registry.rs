@@ -52,6 +52,18 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// Clone the registry, copying only shared storage and dropping all uniques.
+    pub fn clone_without_unique(&self) -> Self {
+        Registry {
+            // Arc clones will bump the ref‑count, sharing the same inner values
+            shared_storage: self.shared_storage.clone(),
+            // start with an empty map of uniques
+            unique_storage: HashMap::new(),
+        }
+    }
+}
+
+impl Registry {
     /// Create a new empty registry.
     pub fn new() -> Self {
         Registry {

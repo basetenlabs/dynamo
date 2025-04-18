@@ -13,10 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::pipeline::{
+use crate::{pipeline::{
     network::egress::push::{AddressedPushRouter, AddressedRequest, PushRouter},
     AsyncEngine, Data, ManyOut, SingleIn,
-};
+}, utils::retry::{self, retry_request}};
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::{
@@ -300,20 +300,33 @@ async fn router(endpoint: &Endpoint) -> Result<Arc<AddressedPushRouter>> {
     )
 }
 
-#[async_trait]
-impl<T, U> AsyncEngine<SingleIn<T>, ManyOut<U>, Error> for Client<T, U>
+impl<T, U> Client<T, U>
 where
     T: Data + Serialize,
     U: Data + for<'de> Deserialize<'de>,
 {
-    async fn generate(&self, request: SingleIn<T>) -> Result<ManyOut<U>, Error> {
+    async fn inner_generate(&self, request: SingleIn<T>) -> Result<ManyOut<U>, Error> {
         match &self.endpoints {
             EndpointSource::Static => self.r#static(request).await,
             EndpointSource::Dynamic(_) => match self.router_mode {
-                RouterMode::Random => self.random(request).await,
+                RouterMode::Random     => self.random(request).await,
                 RouterMode::RoundRobin => self.round_robin(request).await,
-                RouterMode::Direct(endpoint_id) => self.direct(request, endpoint_id).await,
+                RouterMode::Direct(id) => self.direct(request, id).await,
             },
         }
     }
 }
+
+#[async_trait]
+impl<T, U> AsyncEngine<SingleIn<T>, ManyOut<U>, Error> for Client<T, U>
+ where
+     T: Data + Serialize + Clone,
+     U: Data + for<'de> Deserialize<'de>,
+ {
+    async fn generate(&self, request: SingleIn<T>) -> Result<ManyOut<U>, Error> {
+        retry_request(move || {
+            let req = request.clone_without_unique();
+            async move { self.inner_generate(req).await }
+        }).await
+     }
+ }

@@ -37,6 +37,19 @@ pub struct Context<T: Data> {
     stages: Vec<String>,
 }
 
+impl<T: Data + Clone> Context<T> {
+    /// Clone the context, copying `current`, `controller` and `stages`,
+    /// and using `registry.clone_without_unique()` so all unique entries are dropped.
+    pub fn clone_without_unique(&self) -> Self {
+        Context {
+            current: self.current.clone(),
+            controller: Arc::clone(&self.controller),
+            registry: self.registry.clone_without_unique(),
+            stages: self.stages.clone(),
+        }
+    }
+}
+
 impl<T: Send + Sync + 'static> Context<T> {
     // Create a new context with initial data
     pub fn new(current: T) -> Self {
