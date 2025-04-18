@@ -110,7 +110,7 @@ COPY lib/ /workspace/lib/
 COPY components /workspace/components
 COPY launch /workspace/launch
 
-RUN cargo build --release --locked --features mistralrs,sglang,python && \
+RUN cargo build --release --locked --features sglang,python && \
     cargo doc --no-deps && \
     cp target/release/dynamo-run /usr/local/bin && \
     cp target/release/http /usr/local/bin && \
