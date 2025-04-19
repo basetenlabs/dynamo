@@ -303,7 +303,9 @@ async fn call_engine(
         let resp = engine.generate(request).await;
 
         match resp {
-            Ok(r) => return Ok(r),
+            Ok(r) => {
+                return Ok(r);
+            },
             Err(e) => {
                 return Err(ErrorResponse::from_anyhow(e, "Failed to generate completions"))
             }
