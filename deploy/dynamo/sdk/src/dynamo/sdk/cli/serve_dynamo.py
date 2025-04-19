@@ -22,6 +22,8 @@ import inspect
 import json
 import logging
 import os
+import signal
+import sys
 import typing as t
 from typing import Any
 
@@ -33,7 +35,6 @@ from dynamo.sdk import dynamo_context
 from dynamo.sdk.lib.service import LinkedServices
 
 logger = logging.getLogger(__name__)
-
 
 @click.command()
 @click.argument("bento_identifier", type=click.STRING, required=False, default=".")
@@ -104,6 +105,13 @@ def main(
 
         @dynamo_worker()
         async def worker(runtime: DistributedRuntime):
+
+            def handle_exit(signum, frame):
+                logger.warning(f"SIGTERM received, shutting down {service.name} service")
+                runtime.shutdown()
+                os._exit(0)
+
+            signal.signal(signal.SIGTERM, handle_exit)
             global dynamo_context
             dynamo_context["runtime"] = runtime
             if service_name and service_name != service.name:
