@@ -49,6 +49,10 @@ use crate::types::{
 };
 
 use dynamo_runtime::{engine::AsyncEngineStream, pipeline::{AsyncEngineContext, Context}};
+use tokio::time::{sleep, Duration};
+
+const MAX_RETRIES: usize = 10;
+const RETRY_DELAY_MS: u64 = 100; // Backoff delay
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ErrorResponse {
@@ -296,21 +300,28 @@ async fn call_engine(
     request_id: String,
     engine: OpenAIChatCompletionsStreamingEngine,
 ) -> Result<Pin<Box<dyn AsyncEngineStream<Annotated<NvCreateChatCompletionStreamResponse>>>>, (StatusCode, Json<ErrorResponse>)> {
-    loop {
-        let request = Context::with_id(request, request_id);
+    for attempt in 0..MAX_RETRIES {
+        let req = Context::with_id(request.clone(), request_id.clone());
 
         tracing::trace!("Issuing generate call for chat completions");
-        let resp = engine.generate(request).await;
+        let resp = engine.generate(req).await;
 
         match resp {
             Ok(r) => {
                 return Ok(r);
             },
             Err(e) => {
-                return Err(ErrorResponse::from_anyhow(e, "Failed to generate completions"))
+                if e.to_string().to_lowercase().contains("no responders") {
+                    tracing::warn!("No responders (attempt {}/{}), retrying...", attempt + 1, MAX_RETRIES);
+                    sleep(Duration::from_millis(RETRY_DELAY_MS * (attempt as u64 + 1))).await;
+                    continue;
+                } else {
+                    return Err(ErrorResponse::from_anyhow(e, "Failed to generate completions"));
+                }
             }
         }
     }
+    return Err(ErrorResponse::internal_server_error( "No responders after retries"));
 }
 
 // todo - abstract this to the top level lib.rs to be reused
