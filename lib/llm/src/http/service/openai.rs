@@ -40,15 +40,15 @@ use super::{
     RouteDoc,
 };
 
-use crate::protocols::openai::{
+use crate::{protocols::openai::{
     chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse,
-};
+}, types::openai::chat_completions::{NvCreateChatCompletionStreamResponse, OpenAIChatCompletionsStreamingEngine}};
 use crate::types::{
     openai::{chat_completions::NvCreateChatCompletionRequest, completions::CompletionRequest},
     Annotated,
 };
 
-use dynamo_runtime::pipeline::{AsyncEngineContext, Context};
+use dynamo_runtime::{engine::AsyncEngineStream, pipeline::{AsyncEngineContext, Context}};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ErrorResponse {
@@ -252,17 +252,7 @@ async fn chat_completions(
     // this will increment the inflight gauge for the model
     let mut inflight = state.create_inflight_guard(model, Endpoint::ChatCompletions, streaming);
 
-    // setup context
-    // todo - inherit request_id from distributed trace details
-    let request = Context::with_id(request, request_id.clone());
-
-    tracing::trace!("Issuing generate call for chat completions");
-
-    // issue the generate call on the engine
-    let stream = engine
-        .generate(request)
-        .await
-        .map_err(|e| ErrorResponse::from_anyhow(e, "Failed to generate completions"))?;
+    let stream = call_engine(request, request_id.clone(), engine).await?;
 
     // capture the context to cancel the stream if the client disconnects
     let ctx = stream.context();
@@ -298,6 +288,22 @@ async fn chat_completions(
 
         inflight.mark_ok();
         Ok(Json(response).into_response())
+    }
+}
+
+async fn call_engine(
+    request: NvCreateChatCompletionRequest, 
+    request_id: String,
+    engine: OpenAIChatCompletionsStreamingEngine,
+) -> Result<Pin<Box<dyn AsyncEngineStream<Annotated<NvCreateChatCompletionStreamResponse>>>>, (StatusCode, Json<ErrorResponse>)> {
+    loop {
+        let request = Context::with_id(request, request_id);
+
+        tracing::trace!("Issuing generate call for chat completions");
+        let resp = engine.generate(request).await;
+
+        // issue the generate call on the engine
+        return resp.map_err(|e| ErrorResponse::from_anyhow(e, "Failed to generate completions"));
     }
 }
 
