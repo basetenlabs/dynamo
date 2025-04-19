@@ -29,6 +29,13 @@ from dynamo.sdk.lib.config import ServiceConfig
 
 logger = logging.getLogger(__name__)
 
+ROUTER_RETRIES = 10
+ROUTER_RETRY_DELAY_MS = 100
+
+# TODO(pankaj) High values for testing locally, reduce this for production.
+TRTLLM_WORKER_RETRIES = 120
+TRTLLM_WORKER_RETRY_DELAY_MS = 1000
+
 
 @service(
     dynamo={
@@ -88,31 +95,57 @@ class Processor(ChatProcessorMixin):
 
         worker_id = ""
         if self.router_mode == "kv":
-            async for route_response in self.router.generate(
-                preprocessed_request.tokens.model_dump_json()
-            ):
-                worker_id, prefix_hit_rate = route_response.split("_")
-                prefix_hit_rate = float(prefix_hit_rate)
-                logger.info(
-                    f"Worker ID: {worker_id} with estimated prefix hit rate: {prefix_hit_rate}"
-                )
+            for _ in range(ROUTER_RETRIES):
+                try:
+                    async for route_response in self.router.generate(
+                        preprocessed_request.tokens.model_dump_json()
+                    ):
+                        worker_id, prefix_hit_rate = route_response.split("_")
+                        prefix_hit_rate = float(prefix_hit_rate)
+                        logger.info(
+                            f"Worker ID: {worker_id} with estimated prefix hit rate: {prefix_hit_rate}"
+                        )
+                        break
+
+                    break
+                except Exception as e:
+                    if "no responders" in str(e):
+                        logger.warning(
+                            f"No workers available, retrying in {ROUTER_RETRY_DELAY_MS} ms..."
+                        )
+                        await asyncio.sleep(ROUTER_RETRY_DELAY_MS / 1000)
+                    else:
+                        logger.error(f"Error in worker request: {e}")
+                        raise e
+
+
+        for i in range(TRTLLM_WORKER_RETRIES):
+            try:
+                if worker_id == "":
+                    if self.router_mode == "round-robin":
+                        self._send_request = self.worker_client.round_robin
+                    else:
+                        # fallback to random
+                        self._send_request = self.worker_client.random
+
+                    engine_generator = await self._send_request(
+                        preprocessed_request.model_dump_json()
+                    )
+                else:
+                    engine_generator = await self.worker_client.direct(
+                        preprocessed_request.model_dump_json(), int(worker_id)
+                    )
                 break
-
-        if worker_id == "":
-            if self.router_mode == "round-robin":
-                self._send_request = self.worker_client.round_robin
-            else:
-                # fallback to random
-                self._send_request = self.worker_client.random
-
-            engine_generator = await self._send_request(
-                preprocessed_request.model_dump_json()
-            )
-
-        else:
-            engine_generator = await self.worker_client.direct(
-                preprocessed_request.model_dump_json(), int(worker_id)
-            )
+            except Exception as e:
+                err_str = str(e).lower()
+                if "no responders" in err_str or "not found for endpoint" in err_str or "no endpoints found for" in err_str:
+                    logger.warning(
+                        f"No workers available, retry attempt {i}, retrying in {TRTLLM_WORKER_RETRY_DELAY_MS} ms..."
+                    )
+                    await asyncio.sleep(TRTLLM_WORKER_RETRY_DELAY_MS / 1000)
+                else:
+                    logger.error(f"Error in worker request: {e}")
+                    raise
 
         if request_type == RequestType.CHAT:
             async for response in self.chat_processor.postprocess(
