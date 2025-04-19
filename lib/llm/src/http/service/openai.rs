@@ -302,8 +302,12 @@ async fn call_engine(
         tracing::trace!("Issuing generate call for chat completions");
         let resp = engine.generate(request).await;
 
-        // issue the generate call on the engine
-        return resp.map_err(|e| ErrorResponse::from_anyhow(e, "Failed to generate completions"));
+        match resp {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                return Err(ErrorResponse::from_anyhow(e, "Failed to generate completions"))
+            }
+        }
     }
 }
 
