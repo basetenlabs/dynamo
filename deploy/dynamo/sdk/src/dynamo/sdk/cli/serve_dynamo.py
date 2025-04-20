@@ -23,7 +23,7 @@ import json
 import logging
 import os
 import signal
-import sys
+import time
 import typing as t
 from typing import Any
 
@@ -105,11 +105,16 @@ def main(
 
         @dynamo_worker()
         async def worker(runtime: DistributedRuntime):
+            async def shutdown_sequence():
+                logger.warning(f"SIGTERM received, prepare to shut down {service.name} service")
+                runtime.shutdown()
+                logger.info(f"Waiting for graceful shutdown of {service.name}...")
+                await asyncio.sleep(60)
+                logger.warning(f"Shutting down {service.name} service")
+                os._exit(0)
 
             def handle_exit(signum, frame):
-                logger.warning(f"SIGTERM received, shutting down {service.name} service")
-                runtime.shutdown()
-                os._exit(0)
+                asyncio.create_task(shutdown_sequence())
 
             signal.signal(signal.SIGTERM, handle_exit)
             global dynamo_context

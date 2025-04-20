@@ -48,6 +48,7 @@ impl PushEndpoint {
                 // process shutdown
                 _ = self.cancellation_token.cancelled() => {
                     // tracing::trace!(worker_id, "Shutting down service {}", self.endpoint.name);
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     if let Err(e) = endpoint.stop().await {
                         tracing::warn!("Failed to stop NATS service: {:?}", e);
                     }
