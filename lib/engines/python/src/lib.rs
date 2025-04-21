@@ -39,6 +39,10 @@ use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use dynamo_llm::backend::ExecutionContext;
 use dynamo_llm::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine;
 
+static IS_STOPPED_NAME: &CStr = unsafe { CStr::from_bytes_with_nul_unchecked(b"is_stopped\0") };
+static IS_STOPPED_DOC: &CStr = unsafe { CStr::from_bytes_with_nul_unchecked(b"Returns True if the context is stopped - http client-side drop\0") };
+
+
 /// Python snippet to import a file as a module
 const PY_IMPORT: &CStr = cr#"
 import runpy
@@ -60,8 +64,8 @@ class Module:
         self.__dict__.update(module_dict)
         self._generate_func = module_dict['generate']
 
-    async def generate(self, request):
-        async for response in self._generate_func(request):
+    async def generate(self, request, *args, **kwargs):
+        async for response in self._generate_func(request, *args, **kwargs):
             yield response
 
 # Create module instance and store it in globals
@@ -223,9 +227,10 @@ where
         let (request, context) = request.transfer(());
         let ctx = context.context();
 
-        let id = context.id().to_string();
-        tracing::trace!("processing request: {}", id);
-
+        let id: String = context.id().to_string();
+        tracing::info!("processing request: {}", id);
+        let request_id = id.clone();
+        let ctx_python = ctx.clone();
         // Clone the PyObject to move into the thread
 
         // Create a channel to communicate between the Python thread and the Rust async context
@@ -247,7 +252,17 @@ where
         let stream = tokio::task::spawn_blocking(move || {
             Python::with_gil(|py| {
                 let py_request = pythonize(py, &request)?;
-                let gen = generator.call1(py, (py_request,))?;
+                // Create a Python function that calls context.is_stopped()
+                let is_stopped = pyo3::types::PyCFunction::new_closure(
+                    py,
+                    Some(IS_STOPPED_NAME),
+                    Some(IS_STOPPED_DOC),
+                    move |_: &pyo3::Bound<'_, pyo3::types::PyTuple>, _kwargs: Option<&pyo3::Bound<'_, pyo3::types::PyDict>>| -> PyResult<bool> {
+                        Ok(ctx_python.is_stopped())
+                    },
+                )?;
+                // Pass (request, id, is_stopped) to Python
+                let gen = generator.call1(py, (py_request, request_id, is_stopped))?;
                 let locals = TaskLocals::new(event_loop.bind(py).clone());
                 pyo3_async_runtimes::tokio::into_stream_with_locals_v1(locals, gen.into_bound(py))
             })

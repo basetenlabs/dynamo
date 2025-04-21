@@ -21,7 +21,10 @@ members = [
     "lib/runtime",
     "lib/tokens",
     "lib/bindings/c",
-    "lib/engines/*",
+    # "lib/engines/*", # can't compile all engines without c++
+    "lib/engines/vllm",
+    "lib/engines/sglang",
+    "lib/engines/python",
 ]
 resolver = "3"
 
