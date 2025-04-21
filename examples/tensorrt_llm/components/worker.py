@@ -94,9 +94,5 @@ class TensorRTLLMWorker(BaseTensorrtLLMEngine):
 
     @dynamo_endpoint()
     async def generate(self, request: TRTLLMWorkerRequest, is_stopped):
-        async for response in super().generate(request):
-            if is_stopped():
-                logger.info("Stopping trtllm worker generation due to stop signal.")
-                break
-
+        async for response in super().generate(request, is_stopped):
             yield response

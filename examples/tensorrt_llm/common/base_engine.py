@@ -446,7 +446,7 @@ class BaseTensorrtLLMEngine:
 
         return ctx_response_obj
 
-    async def generate(self, request: TRTLLMWorkerRequest):
+    async def generate(self, request: TRTLLMWorkerRequest, is_stopped):
         if self._llm_engine is None:
             raise RuntimeError("Engine not initialized")
 
@@ -484,14 +484,20 @@ class BaseTensorrtLLMEngine:
             )
 
             sampling_params = get_sampling_params(request.sampling_params)
-            async for response in self._llm_engine.generate_async(
+            request_output = self._llm_engine.generate_async(
                 inputs=worker_inputs,
                 sampling_params=sampling_params,
                 disaggregated_params=disaggregated_params,
                 streaming=False
                 if self._server_type == ServerType.CTX
                 else request.streaming,
-            ):
+            )
+            async for response in request_output:
+                if is_stopped():
+                    logger.info("Stopping trtllm worker generation due to stop signal.")
+                    self._llm_engine._executor.abort_request(request_output.id)
+                    break
+
                 # Convert the disaggregated params to OAI format so
                 # it can be sent over the network.
                 response.outputs[
