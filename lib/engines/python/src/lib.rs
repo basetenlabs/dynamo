@@ -22,8 +22,8 @@ use dynamo_runtime::pipeline::error as pipeline_error;
 pub use dynamo_runtime::{
     error,
     pipeline::{
-        async_trait, AsyncEngine, AsyncEngineContextProvider, Data, ManyOut, ResponseStream,
-        SingleIn, AsyncEngineContext, Context
+        async_trait, AsyncEngine, AsyncEngineContext, AsyncEngineContextProvider, Context, Data,
+        ManyOut, ResponseStream, SingleIn,
     },
     protocols::annotated::Annotated,
     CancellationToken, Error, Result,
@@ -121,7 +121,10 @@ pub struct PyContext {
 impl PyContext {
     // Rust-only constructor
     pub fn new(inner: Arc<dyn AsyncEngineContext>) -> Self {
-        Self { inner, child_contexts: Vec::new() }
+        Self {
+            inner,
+            child_contexts: Vec::new(),
+        }
     }
 
     pub fn add_child_context(&mut self, child: Arc<dyn AsyncEngineContext>) {
@@ -291,10 +294,7 @@ where
             Python::with_gil(|py| {
                 let py_request = pythonize(py, &request)?;
                 // Create a Python function that calls context.is_stopped()
-                let py_ctx = Py::new(
-                    py,
-                    PyContext::new(ctx_python.clone()),
-                )?;
+                let py_ctx = Py::new(py, PyContext::new(ctx_python.clone()))?;
                 // let py_ctx TODO
                 // Pass (request, id, is_stopped) to Python
                 let gen = generator.call1(py, (py_request, py_ctx))?;

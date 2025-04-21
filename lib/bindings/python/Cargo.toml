@@ -47,6 +47,7 @@ thiserror = { version = "2.0" }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0" }
 tracing = { version = "0" }
+chrono = { version = "*" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
