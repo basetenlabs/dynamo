@@ -1,10 +1,9 @@
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 // chrono
-use chrono::Utc; 
+use chrono::Utc;
 // bring in *your* Python binding Component (and anything else from super)
 use super::*;
-
 
 // Import your BillingEvent and BillingPublisher from llm_rs
 use llm_rs::billing::{BillingEvent, BillingPublisher};
@@ -21,7 +20,11 @@ pub struct PyBillingEvent {
 impl PyBillingEvent {
     #[new]
     pub fn new(output_tokens: i32, input_tokens: i32, organization_id: String) -> Self {
-        Self { output_tokens, input_tokens, organization_id }
+        Self {
+            output_tokens,
+            input_tokens,
+            organization_id,
+        }
     }
 }
 
