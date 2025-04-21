@@ -10,7 +10,7 @@ pub struct BillingEvent {
     pub timestamp: u64,
     pub output_tokens: i32,
     pub input_tokens: i32,
-    pub organization_name: String,
+    pub organization_id: String,
 }
 
 pub struct BillingPublisher {
