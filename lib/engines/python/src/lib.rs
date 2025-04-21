@@ -144,6 +144,10 @@ impl PyContext {
         // stop all child_context
     }
 
+    fn new_similar_id (&self) -> String {
+        format!("{}--{}{}", self.inner.id(), self.child_contexts.len(), uuid::Uuid::new_v4())
+    }
+
     fn child_stop_generating(&self) {
         for child in &self.child_contexts {
             child.stop_generating();
