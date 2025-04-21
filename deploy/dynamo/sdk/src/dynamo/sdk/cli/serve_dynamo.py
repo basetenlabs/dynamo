@@ -108,8 +108,12 @@ def main(
             async def shutdown_sequence():
                 logger.warning(f"SIGTERM received, prepare to shut down {service.name} service")
                 runtime.shutdown()
+                nats_shutdown_delay_secs = int(os.environ.get(
+                    "NATS_SHUTDOWN_DELAY_SECS", "60"))
+                if nats_shutdown_delay_secs <= 0:
+                    nats_shutdown_delay_secs = 1
                 logger.info(f"Waiting for graceful shutdown of {service.name}...")
-                await asyncio.sleep(60)
+                await asyncio.sleep(nats_shutdown_delay_secs)
                 logger.warning(f"Shutting down {service.name} service")
                 os._exit(0)
 

@@ -70,13 +70,13 @@ def dynamo_endpoint(
             # Validate the request
             try:
                 args_list = list(args)
-                if len(args) in [1, 2] and issubclass(request_model, BaseModel):
-                    if isinstance(args[-1], str):
-                        args_list[-1] = request_model.parse_raw(args[-1])
-                    elif isinstance(args[-1], dict):
-                        args_list[-1] = request_model.parse_obj(args[-1])
+                if len(args) in [1, 2, 3] and issubclass(request_model, BaseModel):
+                    if isinstance(args[-2], str):
+                        args_list[-2] = request_model.parse_raw(args[-2])
+                    elif isinstance(args[-2], dict):
+                        args_list[-2] = request_model.parse_obj(args[-2])
                     else:
-                        raise ValueError(f"Invalid request: {args[-1]}")
+                        raise ValueError(f"Invalid request: {args[-2]}")
             except ValidationError as e:
                 raise ValueError(f"Invalid request: {e}")
 

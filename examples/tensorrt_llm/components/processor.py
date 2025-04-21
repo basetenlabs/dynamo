@@ -163,7 +163,7 @@ class Processor(ChatProcessorMixin):
                 yield json.loads(response)
 
     @dynamo_endpoint(name="chat/completions")
-    async def generate_chat(self, raw_request: DynamoTRTLLMChatCompletionRequest):
+    async def generate_chat(self, raw_request: DynamoTRTLLMChatCompletionRequest, is_stopped):
         # max_tokens is deprecated, however if the max_tokens is provided instead
         # of max_completion_tokens, we will use the value as max_completion_tokens.
         if raw_request.max_tokens is not None:
@@ -175,6 +175,9 @@ class Processor(ChatProcessorMixin):
                         "max_tokens and max_completion_tokens must be the same"
                     )
         async for response in self._generate(raw_request, RequestType.CHAT):
+            if is_stopped():
+                logger.info("Stopping chat generation due to stop signal.")
+                break
             yield response
 
     # @dynamo_endpoint()

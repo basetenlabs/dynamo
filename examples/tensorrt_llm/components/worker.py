@@ -93,6 +93,10 @@ class TensorRTLLMWorker(BaseTensorrtLLMEngine):
         await self._kv_metrics_publisher.create_endpoint(component)
 
     @dynamo_endpoint()
-    async def generate(self, request: TRTLLMWorkerRequest):
+    async def generate(self, request: TRTLLMWorkerRequest, is_stopped):
         async for response in super().generate(request):
+            if is_stopped():
+                logger.info("Stopping trtllm worker generation due to stop signal.")
+                break
+
             yield response

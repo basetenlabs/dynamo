@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::env;
+
 use super::*;
 use anyhow::Result;
 use async_nats::service::endpoint::Endpoint;
@@ -35,6 +37,10 @@ impl PushEndpoint {
 
     pub async fn start(self, endpoint: Endpoint) -> Result<()> {
         let mut endpoint = endpoint;
+        let nats_shutdown_delay_secs = env::var("NATS_SHUTDOWN_DELAY_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(60);
 
         loop {
             let req = tokio::select! {
@@ -48,7 +54,7 @@ impl PushEndpoint {
                 // process shutdown
                 _ = self.cancellation_token.cancelled() => {
                     // tracing::trace!(worker_id, "Shutting down service {}", self.endpoint.name);
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(nats_shutdown_delay_secs)).await;
                     if let Err(e) = endpoint.stop().await {
                         tracing::warn!("Failed to stop NATS service: {:?}", e);
                     }

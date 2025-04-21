@@ -211,7 +211,7 @@ class Router:
         return best_worker_id, worker_scores.get(best_worker_id, 0.0)
 
     @dynamo_endpoint()
-    async def generate(self, request: Tokens) -> AsyncIterator[WorkerId]:
+    async def generate(self, request: Tokens, is_stopped) -> AsyncIterator[WorkerId]:
         if self.indexer is None or self.metrics_aggregator is None:
             yield "_0.0"
 
