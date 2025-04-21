@@ -130,6 +130,10 @@ impl PyContext {
     pub fn add_child_context(&mut self, child: Arc<dyn AsyncEngineContext>) {
         self.child_contexts.push(child);
     }
+
+    pub fn new_similar_id (&self) -> String {
+        format!("{}--{}{}", self.inner.id(), self.child_contexts.len(), &uuid::Uuid::new_v4().to_string()[..7])
+    }
 }
 
 #[pymethods]
@@ -142,10 +146,6 @@ impl PyContext {
     fn stop_generating(&self) {
         self.inner.stop_generating();
         // stop all child_context
-    }
-
-    fn new_similar_id (&self) -> String {
-        format!("{}--{}{}", self.inner.id(), self.child_contexts.len(), uuid::Uuid::new_v4())
     }
 
     fn child_stop_generating(&self) {
