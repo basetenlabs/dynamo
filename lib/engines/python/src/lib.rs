@@ -16,13 +16,14 @@
 use std::ffi::CStr;
 use std::{env, path::Path, sync::Arc};
 
-use anyhow::Context;
+use anyhow::Context as anyhow_context;
 use dynamo_runtime::pipeline::error as pipeline_error;
+
 pub use dynamo_runtime::{
     error,
     pipeline::{
         async_trait, AsyncEngine, AsyncEngineContextProvider, Data, ManyOut, ResponseStream,
-        SingleIn,
+        SingleIn, AsyncEngineContext, Context
     },
     protocols::annotated::Annotated,
     CancellationToken, Error, Result,
@@ -38,10 +39,6 @@ use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use dynamo_llm::backend::ExecutionContext;
 use dynamo_llm::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine;
-
-static IS_STOPPED_NAME: &CStr = unsafe { CStr::from_bytes_with_nul_unchecked(b"is_stopped\0") };
-static IS_STOPPED_DOC: &CStr = unsafe { CStr::from_bytes_with_nul_unchecked(b"Returns True if the context is stopped - http client-side drop\0") };
-
 
 /// Python snippet to import a file as a module
 const PY_IMPORT: &CStr = cr#"
@@ -111,6 +108,48 @@ pub async fn make_token_engine(
     let engine = new_engine(cancel_token, py_file, py_args).await?;
     let engine: ExecutionContext = Arc::new(engine);
     Ok(engine)
+}
+
+#[pyclass]
+pub struct PyContext {
+    // This field isn’t exposed to Python and is constructed in Rust.
+    pub inner: Arc<dyn AsyncEngineContext>,
+    /// a vector of Arc<dyn AsyncEngineContext>
+    child_contexts: Vec<Arc<dyn AsyncEngineContext>>,
+}
+
+impl PyContext {
+    // Rust-only constructor
+    pub fn new(inner: Arc<dyn AsyncEngineContext>) -> Self {
+        Self { inner, child_contexts: Vec::new() }
+    }
+
+    pub fn add_child_context(&mut self, child: Arc<dyn AsyncEngineContext>) {
+        self.child_contexts.push(child);
+    }
+}
+
+#[pymethods]
+impl PyContext {
+    // Remove #[new] to avoid requiring conversion of Arc<Controller> from Python.
+    fn is_stopped(&self) -> bool {
+        self.inner.is_stopped()
+    }
+
+    fn stop_generating(&self) {
+        self.inner.stop_generating();
+        // stop all child_context
+    }
+
+    fn child_stop_generating(&self) {
+        for child in &self.child_contexts {
+            child.stop_generating();
+        }
+    }
+
+    fn id(&self) -> &str {
+        &self.inner.id()
+    }
 }
 
 #[derive(Clone)]
@@ -229,7 +268,6 @@ where
 
         let id: String = context.id().to_string();
         tracing::info!("processing request: {}", id);
-        let request_id = id.clone();
         let ctx_python = ctx.clone();
         // Clone the PyObject to move into the thread
 
@@ -253,16 +291,13 @@ where
             Python::with_gil(|py| {
                 let py_request = pythonize(py, &request)?;
                 // Create a Python function that calls context.is_stopped()
-                let is_stopped = pyo3::types::PyCFunction::new_closure(
+                let py_ctx = Py::new(
                     py,
-                    Some(IS_STOPPED_NAME),
-                    Some(IS_STOPPED_DOC),
-                    move |_: &pyo3::Bound<'_, pyo3::types::PyTuple>, _kwargs: Option<&pyo3::Bound<'_, pyo3::types::PyDict>>| -> PyResult<bool> {
-                        Ok(ctx_python.is_stopped())
-                    },
+                    PyContext::new(ctx_python.clone()),
                 )?;
+                // let py_ctx TODO
                 // Pass (request, id, is_stopped) to Python
-                let gen = generator.call1(py, (py_request, request_id, is_stopped))?;
+                let gen = generator.call1(py, (py_request, py_ctx))?;
                 let locals = TaskLocals::new(event_loop.bind(py).clone());
                 pyo3_async_runtimes::tokio::into_stream_with_locals_v1(locals, gen.into_bound(py))
             })

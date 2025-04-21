@@ -26,10 +26,12 @@ use tokio::sync::Mutex;
 
 use dynamo_runtime::{
     self as rs, logging,
-    pipeline::{EngineStream, ManyOut, SingleIn},
+    pipeline::{EngineStream, ManyOut, SingleIn, AsyncEngineContextProvider},
     protocols::annotated::Annotated as RsAnnotated,
     traits::DistributedRuntimeProvider,
 };
+
+use dynamo_engine_python::PyContext;
 
 use dynamo_llm::{self as llm_rs};
 
@@ -553,12 +555,13 @@ impl Client {
     }
 
     /// Directly send a request to a specific endpoint.
-    #[pyo3(signature = (request, endpoint_id, annotated=DEFAULT_ANNOTATED_SETTING))]
+    #[pyo3(signature = (request, endpoint_id, associated_context, annotated=DEFAULT_ANNOTATED_SETTING))]
     fn direct<'p>(
         &self,
         py: Python<'p>,
         request: PyObject,
         endpoint_id: i64,
+        associated_context: &mut PyContext,
         annotated: Option<bool>,
     ) -> PyResult<Bound<'p, PyAny>> {
         let request: serde_json::Value = pythonize::depythonize(&request.into_bound(py))?;
@@ -566,10 +569,14 @@ impl Client {
 
         let (tx, rx) = tokio::sync::mpsc::channel(32);
         let client = self.inner.clone();
+        let single = SingleIn::new(request);
+        // register the context on the python side.
+        let child_ctx = single.context();
+        associated_context.add_child_context(child_ctx.clone());
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let stream = client
-                .direct(request.into(), endpoint_id)
+                .direct(single, endpoint_id)
                 .await
                 .map_err(to_pyerr)?;
 
