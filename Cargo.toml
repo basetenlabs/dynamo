@@ -22,7 +22,8 @@ members = [
     "lib/tokens",
     "lib/bindings/c",
     # "lib/engines/*", # can't compile all engines without c++
-    "lib/engines/vllm",
+    "lib/engines/vllm0_7",
+    "lib/engines/vllm0_8",
     "lib/engines/sglang",
     "lib/engines/python",
 ]
