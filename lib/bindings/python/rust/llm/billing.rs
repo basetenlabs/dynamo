@@ -1,11 +1,8 @@
 use pyo3::prelude::*;
+use pyo3::exceptions::PyRuntimeError;
 use serde::{Deserialize, Serialize};
-// chrono
 use chrono::Utc;
-// bring in *your* Python binding Component (and anything else from super)
 use super::*;
-
-// Import your BillingEvent and BillingPublisher from llm_rs
 use llm_rs::billing::{BillingEvent, BillingPublisher};
 
 #[pyclass]
@@ -30,10 +27,9 @@ impl PyBillingEvent {
 
 impl From<&PyBillingEvent> for BillingEvent {
     fn from(event: &PyBillingEvent) -> Self {
-        // get utc timestamp
         let timestamp = Utc::now().timestamp_millis() as u64;
         BillingEvent {
-            timestamp: timestamp,
+            timestamp,
             output_tokens: event.output_tokens,
             input_tokens: event.input_tokens,
             organization_id: event.organization_id.clone(),
@@ -50,15 +46,19 @@ pub struct PyBillingPublisher {
 impl PyBillingPublisher {
     #[new]
     fn new(component: Component) -> PyResult<Self> {
-        // component.inner is the runtime Component; clone that for the publisher.
-        let publisher = BillingPublisher::new(component.inner.clone())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?;
-        Ok(Self { inner: publisher })
+        let runtime = pyo3_async_runtimes::tokio::get_runtime();
+        // Block on the async constructor of BillingPublisher
+        let publisher = runtime.block_on(async {
+            BillingPublisher::new(component.inner.clone())
+                .map_err(|e| PyRuntimeError::new_err(format!("{}", e)))
+        })?;
+        Ok(PyBillingPublisher { inner: publisher })
     }
 
+    /// Publish a billing event (this will spawn onto the same Tokio reactor).
     fn publish(&self, event: &PyBillingEvent) -> PyResult<()> {
         self.inner
             .publish(event.into())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))
+            .map_err(|e| PyRuntimeError::new_err(format!("{}", e)))
     }
 }
