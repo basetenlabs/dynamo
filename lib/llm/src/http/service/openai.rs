@@ -174,7 +174,10 @@ async fn completions(
         ..request.inner
     };
 
-    let request = CompletionRequest { inner, nvext: None };
+    let request = CompletionRequest {
+        inner,
+        nvext: request.nvext,
+    };
 
     // todo - make the protocols be optional for model name
     // todo - when optional, if none, apply a default
@@ -264,9 +267,10 @@ async fn chat_completions(
         stream: Some(true),
         ..request.inner
     };
+
     let request = NvCreateChatCompletionRequest {
         inner: inner_request,
-        nvext: None,
+        nvext: request.nvext,
     };
 
     // todo - make the protocols be optional for model name
