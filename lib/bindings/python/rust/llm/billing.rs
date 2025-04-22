@@ -11,16 +11,21 @@ pub struct PyBillingEvent {
     pub output_tokens: i32,
     pub input_tokens: i32,
     pub organization_id: String,
+    pub request_id: String,
+    pub model_name: Option<String>,
 }
 
 #[pymethods]
 impl PyBillingEvent {
+    #[pyo3(signature = (output_tokens, input_tokens, organization_id, request_id, model_name=None))]
     #[new]
-    pub fn new(output_tokens: i32, input_tokens: i32, organization_id: String) -> Self {
+    pub fn new(output_tokens: i32, input_tokens: i32, organization_id: String, request_id: String, model_name: Option<String>) -> Self {
         Self {
             output_tokens,
             input_tokens,
             organization_id,
+            request_id,
+            model_name,
         }
     }
 }
@@ -28,11 +33,14 @@ impl PyBillingEvent {
 impl From<&PyBillingEvent> for BillingEvent {
     fn from(event: &PyBillingEvent) -> Self {
         let timestamp = Utc::now().timestamp_millis() as u64;
+        let model_name = event.model_name.clone().unwrap_or_else(|| "".to_string());
         BillingEvent {
             timestamp,
             output_tokens: event.output_tokens,
             input_tokens: event.input_tokens,
             organization_id: event.organization_id.clone(),
+            request_id: event.request_id.clone(),
+            model_name: model_name,
         }
     }
 }
