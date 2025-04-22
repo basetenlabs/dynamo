@@ -39,6 +39,7 @@
 use super::*;
 
 pub mod backend;
+pub mod billing;
 pub mod disagg_router;
 pub mod kv;
 pub mod model_card;

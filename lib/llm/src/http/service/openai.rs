@@ -15,8 +15,8 @@
 
 use axum::{
     extract::State,
-    http::StatusCode,
     http::HeaderMap,
+    http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -131,11 +131,11 @@ fn extract_request_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<E
                 error: "Missing required header: X-Baseten-Billing-Org-Id".to_string(),
             }),
         ))?;
-    
+
     let request_suffix = headers
         .get("X-Baseten-Request-Id")
         .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_owned())  // Use map to convert &str -> String
+        .map(|s| s.to_owned()) // Use map to convert &str -> String
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     Ok(format!("{}--{}", billing_id, request_suffix))
@@ -163,7 +163,7 @@ async fn completions(
         Ok(request_id) => request_id,
         Err(err) => return Err(err),
     };
-    
+
     tracing::info!("request_id: {request_id}");
     // todo - decide on default
     let streaming = request.inner.stream.unwrap_or(false);
