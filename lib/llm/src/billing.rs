@@ -11,7 +11,8 @@ pub struct BillingEvent {
     pub output_tokens: i32,
     pub input_tokens: i32,
     pub organization_id: String,
-    pub model_name: String
+    pub request_id: String,
+    pub model_name: String    
 }
 
 pub struct BillingPublisher {
