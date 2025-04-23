@@ -62,4 +62,4 @@ RUN uv build --wheel --out-dir /workspace/dist && \
 RUN cd /workspace/lib/bindings/python && \
     uv build --wheel --out-dir /workspace/dist --python 3.12
 RUN rm -rf /workspace/.venv
-RUN rm -rf /workspace/target/release/deps && rm -rf /workspace/target/release/build
+RUN rm -rf /workspace/target/release/deps && rm -rf /workspace/target/debug/deps && rm -rf /workspace/target/release/build
