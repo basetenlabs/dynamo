@@ -131,8 +131,13 @@ impl PyContext {
         self.child_contexts.push(child);
     }
 
-    pub fn new_similar_id (&self) -> String {
-        format!("{}--{}{}", self.inner.id(), self.child_contexts.len(), &uuid::Uuid::new_v4().to_string()[..7])
+    pub fn new_similar_id(&self) -> String {
+        format!(
+            "{}--{}{}",
+            self.inner.id(),
+            self.child_contexts.len(),
+            &uuid::Uuid::new_v4().to_string()[..7]
+        )
     }
 }
 

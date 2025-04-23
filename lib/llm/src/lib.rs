@@ -19,6 +19,7 @@
 //! distributed LLM inference solutions.
 
 pub mod backend;
+pub mod billing;
 pub mod common;
 pub mod disagg_router;
 pub mod engines;
@@ -33,7 +34,6 @@ pub mod recorder;
 pub mod tokenizers;
 pub mod tokens;
 pub mod types;
-pub mod billing;
 
 #[cfg(feature = "cuda_kv")]
 pub mod kv;

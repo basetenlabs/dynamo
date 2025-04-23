@@ -1,9 +1,8 @@
+use dynamo_runtime::traits::events::EventPublisher;
 use dynamo_runtime::{component::Component, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing as log;
-use dynamo_runtime::traits::events::EventPublisher;
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BillingEvent {
@@ -12,7 +11,7 @@ pub struct BillingEvent {
     pub input_tokens: i32,
     pub organization_id: String,
     pub request_id: String,
-    pub model_name: String    
+    pub model_name: String,
 }
 
 pub struct BillingPublisher {
@@ -33,19 +32,11 @@ impl BillingPublisher {
 }
 
 fn start_billing_publish_task(component: Component, mut rx: mpsc::UnboundedReceiver<BillingEvent>) {
-    let billing_subject = "billing.events".to_string();
+    let billing_subject = "token_events".to_string();
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            // Serialize event
-            let payload = match serde_json::to_vec(&event) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    log::error!("Failed to serialize billing event: {:?}", e);
-                    continue;
-                }
-            };
             // Publish to billing subject via the component's NATS client
-            if let Err(e) = component.publish(&billing_subject, &payload).await {
+            if let Err(e) = component.publish(&billing_subject, &event).await {
                 log::error!("Failed to publish billing event: {:?}", e);
             }
         }
