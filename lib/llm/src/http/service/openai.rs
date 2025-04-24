@@ -125,12 +125,7 @@ fn extract_request_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<E
     let billing_id = headers
         .get("X-Baseten-Billing-Org-Id")
         .and_then(|h| h.to_str().ok())
-        .ok_or((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Missing required header: X-Baseten-Billing-Org-Id".to_string(),
-            }),
-        ))?;
+        .unwrap_or("org-internalnobillingidprovided");
 
     let request_suffix = headers
         .get("X-Baseten-Request-Id")
