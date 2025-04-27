@@ -127,19 +127,26 @@ _BENTO_WORKER_SCRIPT = "_bentoml_impl.worker.service"
 _DYNAMO_WORKER_SCRIPT = "dynamo.sdk.cli.serve_dynamo"
 
 
-def _create_watcher(name, args, num_processes, working_dir, env):
+def _create_watcher(name, args, numprocesses, working_dir, env):
     """Create a Circus Watcher with the given parameters."""
     from circus.watcher import Watcher
+    from bentoml.serving import running_inside_container
+    import shlex
+    import sys
+    import psutil
 
+    cmd = sys.executable
     return Watcher(
         name=name,
         args=args,
-        numprocesses=num_processes,
+        numprocesses=numprocesses,
         working_dir=working_dir,
+        cmd=shlex.quote(cmd) if psutil.POSIX else cmd,
         env=env,
-        respawn=True,
-        graceful_timeout=30,
+        respawn=not running_inside_container(),
+        graceful_timeout=86400,
         use_sockets=True,
+        stop_children=False,
     )
 
 
@@ -239,20 +246,9 @@ def create_dynamo_watcher(
     # use namespace from the service
     namespace, _ = svc.dynamo_address()
 
-    from circus.watcher import Watcher
-    from bentoml.serving import running_inside_container
-    import shlex
-    import sys
-    import psutil
-    cmd = sys.executable
-    watcher = Watcher(
+    watcher = _create_watcher(
         name=f"{namespace}_{svc.name}",
         args=args,
-        use_sockets=True,
-        graceful_timeout=86400,
-        respawn=not running_inside_container(),
-        cmd=shlex.quote(cmd) if psutil.POSIX else cmd,
-        stop_children=False,
         numprocesses=num_workers,
         working_dir=working_dir,
         env=worker_env,
