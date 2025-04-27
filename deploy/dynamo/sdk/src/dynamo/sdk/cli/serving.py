@@ -147,6 +147,7 @@ def _create_watcher(name, args, numprocesses, working_dir, env):
         graceful_timeout=86400,
         use_sockets=True,
         stop_children=False,
+        copy_env=True,
     )
 
 
