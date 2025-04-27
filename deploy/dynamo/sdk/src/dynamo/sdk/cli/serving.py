@@ -193,7 +193,6 @@ def create_dynamo_watcher(
     env: Optional[Dict[str, str]] = None,
 ) -> tuple[Watcher, CircusSocket, str]:
     """Create a watcher for a Dynamo service in the dependency graph"""
-    from bentoml.serving import create_watcher
 
     num_workers, resource_envs = scheduler.get_resource_envs(svc)
     uri, socket = _get_server_socket(svc, uds_path, port_stack)
@@ -225,10 +224,20 @@ def create_dynamo_watcher(
     # use namespace from the service
     namespace, _ = svc.dynamo_address()
 
-    # Create the watcher with updated environment
-    watcher = create_watcher(
+    from circus.watcher import Watcher
+    from bentoml.serving import running_inside_container
+    import shlex
+    import sys
+    import psutil
+    cmd = sys.executable
+    watcher = Watcher(
         name=f"{namespace}_{svc.name}",
         args=args,
+        use_sockets=True,
+        graceful_timeout=86400,
+        respawn=not running_inside_container(),
+        cmd=shlex.quote(cmd) if psutil.POSIX else cmd,
+        stop_children=False,
         numprocesses=num_workers,
         working_dir=working_dir,
         env=worker_env,
