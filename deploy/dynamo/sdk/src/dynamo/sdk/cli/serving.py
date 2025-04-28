@@ -127,6 +127,30 @@ _BENTO_WORKER_SCRIPT = "_bentoml_impl.worker.service"
 _DYNAMO_WORKER_SCRIPT = "dynamo.sdk.cli.serve_dynamo"
 
 
+def _create_watcher(name, args, numprocesses, working_dir, env):
+    """Create a Circus Watcher with the given parameters."""
+    from circus.watcher import Watcher
+    from bentoml.serving import running_inside_container
+    import shlex
+    import sys
+    import psutil
+
+    cmd = sys.executable
+    return Watcher(
+        name=name,
+        args=args,
+        numprocesses=numprocesses,
+        working_dir=working_dir,
+        cmd=shlex.quote(cmd) if psutil.POSIX else cmd,
+        env=env,
+        respawn=not running_inside_container(),
+        graceful_timeout=86400,
+        use_sockets=True,
+        stop_children=False,
+        copy_env=True,
+    )
+
+
 def _get_dynamo_worker_script(bento_identifier: str, svc_name: str) -> list[str]:
     args = [
         "-m",
@@ -165,7 +189,6 @@ def create_dependency_watcher(
     working_dir: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
 ) -> tuple[Watcher, CircusSocket, str]:
-    from bentoml.serving import create_watcher
 
     num_workers, resource_envs = scheduler.get_resource_envs(svc)
     uri, socket = _get_server_socket(svc, uds_path, port_stack)
@@ -173,7 +196,7 @@ def create_dependency_watcher(
     if resource_envs:
         args.extend(["--worker-env", json.dumps(resource_envs)])
 
-    watcher = create_watcher(
+    watcher = _create_watcher(
         name=f"service_{svc.name}",
         args=args,
         numprocesses=num_workers,
@@ -193,7 +216,6 @@ def create_dynamo_watcher(
     env: Optional[Dict[str, str]] = None,
 ) -> tuple[Watcher, CircusSocket, str]:
     """Create a watcher for a Dynamo service in the dependency graph"""
-    from bentoml.serving import create_watcher
 
     num_workers, resource_envs = scheduler.get_resource_envs(svc)
     uri, socket = _get_server_socket(svc, uds_path, port_stack)
@@ -225,8 +247,7 @@ def create_dynamo_watcher(
     # use namespace from the service
     namespace, _ = svc.dynamo_address()
 
-    # Create the watcher with updated environment
-    watcher = create_watcher(
+    watcher = _create_watcher(
         name=f"{namespace}_{svc.name}",
         args=args,
         numprocesses=num_workers,
@@ -254,7 +275,6 @@ def serve_http(
 
     # WARNING: internal
     from bentoml._internal.utils.circus import create_standalone_arbiter
-    from bentoml.serving import create_watcher
     from circus.sockets import CircusSocket
 
     from dynamo.sdk.lib.logging import configure_server_logging
@@ -411,7 +431,7 @@ def serve_http(
                 except json.JSONDecodeError as e:
                     logger.warning(f"Failed to parse DYNAMO_SERVICE_ENVS: {e}")
 
-            watcher = create_watcher(
+            watcher = _create_watcher(
                 name=f"{namespace}_{svc.name}",
                 args=dynamo_args,
                 numprocesses=num_workers,
@@ -424,7 +444,7 @@ def serve_http(
             )
         else:
             watchers.append(
-                create_watcher(
+                _create_watcher(
                     name="service",
                     args=server_args,
                     working_dir=str(bento_path.absolute()),

@@ -22,17 +22,38 @@ import inspect
 import json
 import logging
 import os
+import signal
 import typing as t
 from typing import Any
 
 import click
 import uvloop
+import psutil
 
 from dynamo.runtime import DistributedRuntime, dynamo_endpoint, dynamo_worker
 from dynamo.sdk import dynamo_context
 from dynamo.sdk.lib.service import LinkedServices
 
 logger = logging.getLogger(__name__)
+
+def sigkill_children(pid=None):
+    """
+    Send SIGKILL to all child processes of `pid` recursively,
+    without waiting and without killing `pid` itself.
+    """
+    if pid is None:
+        pid = os.getpid()
+    try:
+        parent = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+
+    children = parent.children(recursive=True)
+    for child in children:
+        try:
+            child.send_signal(signal.SIGKILL)
+        except psutil.NoSuchProcess:
+            pass
 
 
 @click.command()
@@ -187,6 +208,9 @@ def main(
                 else:
                     logger.info(f"Serving {service.name} with lease: {lease.id()}")
                 result = await endpoints[0].serve_endpoint(twm[0], lease)
+                sigkill_children()
+                logger.info('All child processes killed')
+
 
             except Exception as e:
                 logger.error(f"Error in Dynamo component setup: {str(e)}")
