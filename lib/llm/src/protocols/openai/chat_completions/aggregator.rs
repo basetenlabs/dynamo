@@ -19,8 +19,8 @@ use crate::protocols::{
     convert_sse_stream, Annotated,
 };
 use async_openai::types::{
-    ChatCompletionMessageToolCall, ChatCompletionMessageToolCallChunk, ChatCompletionToolType,
-    FunctionCall, FunctionCallChunk,
+    ChatCompletionMessageToolCall, ChatCompletionToolType,
+    FunctionCall,
 };
 
 use futures::{Stream, StreamExt};
@@ -74,6 +74,24 @@ struct DeltaChoice {
     logprobs: Option<async_openai::types::ChatChoiceLogprobs>,
     /// Accumulated tool calls, keyed by the tool call index.
     tool_calls: BTreeMap<u32, AccumulatedToolCall>,
+}
+
+impl DeltaChoice {
+    /// Creates a new `DeltaChoice` with initial values.
+    fn new(
+        index: u32,
+        role: Option<async_openai::types::Role>,
+        logprobs: Option<async_openai::types::ChatChoiceLogprobs>,
+    ) -> Self {
+        Self {
+            index,
+            text: String::new(),
+            role,
+            finish_reason: None,
+            logprobs,
+            tool_calls: BTreeMap::new(),
+        }
+    }
 }
 
 impl Default for DeltaAggregator {
@@ -308,7 +326,7 @@ mod tests {
 
     use super::*;
     use futures::stream;
-    use async_openai::types::{ChatCompletionMessageToolCallChunk, FunctionCallChunk, ChatCompletionToolType};
+    use async_openai::types::{ChatCompletionMessageToolCallChunk, FunctionCall, ChatCompletionToolType};
 
     #[allow(deprecated)]
     fn create_test_delta(
@@ -371,9 +389,14 @@ mod tests {
             } else {
                  None
             }, // Only set type if there's other data
-            function: FunctionCallChunk {
-                name: fn_name.map(String::from),
-                arguments: fn_args.map(String::from),
+            // Construct FunctionCallStream directly if name or args are present
+            function: if fn_name.is_some() || fn_args.is_some() {
+                Some(async_openai::types::FunctionCallStream {
+                    name: fn_name.map(String::from),
+                    arguments: fn_args.map(String::from),
+                })
+            } else {
+                None
             },
         };
 
