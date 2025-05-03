@@ -133,7 +133,12 @@ fn extract_request_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<E
         .map(|s| s.to_owned()) // Use map to convert &str -> String
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    Ok(format!("{}--{}", billing_id, request_suffix))
+    let billing_model_version = headers
+        .get("X-Baseten-Model-Version-ID")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("modelversionidempty");
+
+    Ok(format!("{}--{}--{}", billing_id, request_suffix, billing_model_version))
 }
 
 /// OpenAI Completions Request Handler

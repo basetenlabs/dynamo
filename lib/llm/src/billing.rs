@@ -12,6 +12,7 @@ pub struct BillingEvent {
     pub organization_id: String,
     pub request_id: String,
     pub model_name: String,
+    pub billing_model_version: String, 
 }
 
 pub struct BillingPublisher {
