@@ -51,7 +51,8 @@ pub struct DeltaAggregator {
     service_tier: Option<async_openai::types::ServiceTierResponse>,
 }
 
-/// Define this struct *before* DeltaChoice
+/// Holds the intermediate state of a single tool call as it's being assembled
+/// from potentially multiple streaming chunks (`ChatCompletionMessageToolCallChunk`).
 #[derive(Clone, Debug, Default)]
 struct AccumulatedToolCall {
     id: Option<String>,
@@ -77,7 +78,6 @@ struct DeltaChoice {
 }
 
 impl DeltaChoice {
-    /// Creates a new `DeltaChoice` with initial values.
     fn new(
         index: u32,
         role: Option<async_openai::types::Role>,
