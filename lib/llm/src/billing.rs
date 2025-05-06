@@ -44,7 +44,7 @@ impl BillingPublisher {
     }
 
     pub fn publish(&self, event: BillingEvent) -> Result<(), mpsc::error::SendError<BillingEvent>> {
-        if event.organization_id.starts_with("org-internal") {
+        if event.organization_id.starts_with("org-internalnobilling") {
             log::info!("Skipping internal publish. Billing event: {}", event);
             Ok(())
         } else {
