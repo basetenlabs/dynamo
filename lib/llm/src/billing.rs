@@ -1,6 +1,7 @@
 use dynamo_runtime::traits::events::EventPublisher;
 use dynamo_runtime::{component::Component, Result};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use tokio::sync::mpsc;
 use tracing as log;
 
@@ -12,7 +13,23 @@ pub struct BillingEvent {
     pub organization_id: String,
     pub request_id: String,
     pub model_name: String,
-    pub billing_model_version: String, 
+    pub billing_model_version: String,
+}
+
+impl fmt::Display for BillingEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "BillingEvent(timestamp: {}, output_tokens: {}, input_tokens: {}, organization_id: {}, request_id: {}, model_name: {}, billing_model_version: {})",
+            self.timestamp,
+            self.output_tokens,
+            self.input_tokens,
+            self.organization_id,
+            self.request_id,
+            self.model_name,
+            self.billing_model_version,
+        )
+    }
 }
 
 pub struct BillingPublisher {
@@ -27,8 +44,13 @@ impl BillingPublisher {
     }
 
     pub fn publish(&self, event: BillingEvent) -> Result<(), mpsc::error::SendError<BillingEvent>> {
-        log::debug!("Publishing billing event: {:?}", event);
-        self.tx.send(event)
+        if event.organization_id.starts_with("org-internal") {
+            log::info!("Skipping internal publish. Billing event: {}", event);
+            Ok(())
+        } else {
+            log::debug!("Publishing billing event: {:?}", event);
+            self.tx.send(event)
+        }
     }
 }
 
