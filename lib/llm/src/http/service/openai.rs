@@ -138,7 +138,10 @@ fn extract_request_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<E
         .and_then(|h| h.to_str().ok())
         .unwrap_or("modelversionidempty");
 
-    Ok(format!("{}--{}--{}", billing_id, request_suffix, billing_model_version))
+    Ok(format!(
+        "{}--{}--{}",
+        billing_id, request_suffix, billing_model_version
+    ))
 }
 
 /// OpenAI Completions Request Handler

@@ -18,13 +18,13 @@ use crate::protocols::{
     codec::{Message, SseCodecError},
     convert_sse_stream, Annotated,
 };
-use async_openai::types::{
-    ChatCompletionMessageToolCall, ChatCompletionToolType,
-    FunctionCall,
-};
+use async_openai::types::{ChatCompletionMessageToolCall, ChatCompletionToolType, FunctionCall};
 
 use futures::{Stream, StreamExt};
-use std::{collections::{HashMap, BTreeMap}, pin::Pin};
+use std::{
+    collections::{BTreeMap, HashMap},
+    pin::Pin,
+};
 
 /// A type alias for a pinned, dynamically-dispatched stream that is `Send` and `Sync`.
 type DataStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync>>;
@@ -158,14 +158,13 @@ impl DeltaAggregator {
                     // Aggregate choices incrementally.
                     for choice in delta.inner.choices {
                         let state_choice =
-                            aggregator
-                                .choices
-                                .entry(choice.index)
-                                .or_insert_with(|| DeltaChoice::new(choice.index, choice.delta.role, choice.logprobs));
+                            aggregator.choices.entry(choice.index).or_insert_with(|| {
+                                DeltaChoice::new(choice.index, choice.delta.role, choice.logprobs)
+                            });
 
                         // Update role if it wasn't set initially (though unlikely for assistant messages with tool calls)
                         if state_choice.role.is_none() && choice.delta.role.is_some() {
-                             state_choice.role = choice.delta.role;
+                            state_choice.role = choice.delta.role;
                         }
 
                         // Append content if available. Should be None if tool_calls is Some.
@@ -182,7 +181,9 @@ impl DeltaAggregator {
                                     .or_default();
 
                                 // Set ID if not already set
-                                if accumulated_tool_call.id.is_none() && tool_call_chunk.id.is_some() {
+                                if accumulated_tool_call.id.is_none()
+                                    && tool_call_chunk.id.is_some()
+                                {
                                     accumulated_tool_call.id = tool_call_chunk.id;
                                 }
 
@@ -192,7 +193,9 @@ impl DeltaAggregator {
                                         accumulated_tool_call.function_name.push_str(&name_part);
                                     }
                                     if let Some(args_part) = function_chunk.arguments {
-                                        accumulated_tool_call.function_arguments.push_str(&args_part);
+                                        accumulated_tool_call
+                                            .function_arguments
+                                            .push_str(&args_part);
                                     }
                                 }
                             }
@@ -250,29 +253,38 @@ impl From<DeltaChoice> for async_openai::types::ChatChoice {
     /// The `function_call` field is deprecated.
     fn from(delta: DeltaChoice) -> Self {
         // Convert accumulated tool calls into the final format
-        let final_tool_calls: Option<Vec<ChatCompletionMessageToolCall>> = if delta.tool_calls.is_empty() {
-            None
-        } else {
-            let calls: Vec<_> = delta
-                .tool_calls
-                .into_values()
-                .filter_map(|acc| {
-                    // Ensure we have the necessary parts (ID should always be present if chunks existed)
-                    acc.id.map(|id| ChatCompletionMessageToolCall {
-                        id,
-                        r#type: ChatCompletionToolType::Function,
-                        function: FunctionCall {
-                            name: acc.function_name,
-                            arguments: acc.function_arguments,
-                        },
+        let final_tool_calls: Option<Vec<ChatCompletionMessageToolCall>> =
+            if delta.tool_calls.is_empty() {
+                None
+            } else {
+                let calls: Vec<_> = delta
+                    .tool_calls
+                    .into_values()
+                    .filter_map(|acc| {
+                        // Ensure we have the necessary parts (ID should always be present if chunks existed)
+                        acc.id.map(|id| ChatCompletionMessageToolCall {
+                            id,
+                            r#type: ChatCompletionToolType::Function,
+                            function: FunctionCall {
+                                name: acc.function_name,
+                                arguments: acc.function_arguments,
+                            },
+                        })
                     })
-                })
-                .collect();
-             if calls.is_empty() { None } else { Some(calls) }
-        };
+                    .collect();
+                if calls.is_empty() {
+                    None
+                } else {
+                    Some(calls)
+                }
+            };
 
         // Content should be None only if the accumulated text is empty.
-        let final_content = if delta.text.is_empty() { None } else { Some(delta.text) };
+        let final_content = if delta.text.is_empty() {
+            None
+        } else {
+            Some(delta.text)
+        };
 
         async_openai::types::ChatChoice {
             message: async_openai::types::ChatCompletionResponseMessage {
@@ -325,8 +337,10 @@ impl NvCreateChatCompletionResponse {
 mod tests {
 
     use super::*;
+    use async_openai::types::{
+        ChatCompletionMessageToolCallChunk, ChatCompletionToolType, FunctionCall,
+    };
     use futures::stream;
-    use async_openai::types::{ChatCompletionMessageToolCallChunk, FunctionCall, ChatCompletionToolType};
 
     #[allow(deprecated)]
     fn create_test_delta(
@@ -385,9 +399,9 @@ mod tests {
             index: tool_index,
             id: tool_id.map(String::from),
             r#type: if tool_id.is_some() || fn_name.is_some() || fn_args.is_some() {
-                 Some(ChatCompletionToolType::Function)
+                Some(ChatCompletionToolType::Function)
             } else {
-                 None
+                None
             }, // Only set type if there's other data
             // Construct FunctionCallStream directly if name or args are present
             function: if fn_name.is_some() || fn_args.is_some() {
@@ -401,7 +415,7 @@ mod tests {
         };
 
         let delta = async_openai::types::ChatCompletionStreamResponseDelta {
-            content: None, // Tool call chunks typically have None content
+            content: None,       // Tool call chunks typically have None content
             function_call: None, // Deprecated
             tool_calls: Some(vec![tool_call_chunk]),
             role,
@@ -612,19 +626,19 @@ mod tests {
     async fn test_tool_call_aggregation() {
         // Simulate a tool call split across chunks, and another single chunk tool call
         let chunk1 = create_tool_call_delta(
-            0, // choice index
-            0, // tool index
-            Some("call_abc123"), // tool id
-            Some("get_"), // function name part 1
-            None, // args part 1
+            0,                                          // choice index
+            0,                                          // tool index
+            Some("call_abc123"),                        // tool id
+            Some("get_"),                               // function name part 1
+            None,                                       // args part 1
             Some(async_openai::types::Role::Assistant), // Role only needed once usually
             None,
         );
         let chunk2 = create_tool_call_delta(
-            0, // choice index
-            0, // tool index
-            None, // ID already sent
-            Some("weather"), // function name part 2
+            0,                      // choice index
+            0,                      // tool index
+            None,                   // ID already sent
+            Some("weather"),        // function name part 2
             Some("{\"location\":"), // args part 2
             None,
             None,
@@ -662,21 +676,39 @@ mod tests {
         let choice = &response.inner.choices[0];
         assert_eq!(choice.index, 0);
         assert_eq!(choice.message.role, async_openai::types::Role::Assistant);
-        assert_eq!(choice.finish_reason, Some(async_openai::types::FinishReason::ToolCalls));
-        assert!(choice.message.content.is_none(), "Content should be None when tool calls are present");
+        assert_eq!(
+            choice.finish_reason,
+            Some(async_openai::types::FinishReason::ToolCalls)
+        );
+        assert!(
+            choice.message.content.is_none(),
+            "Content should be None when tool calls are present"
+        );
 
-        assert!(choice.message.tool_calls.is_some(), "Tool calls should be present");
+        assert!(
+            choice.message.tool_calls.is_some(),
+            "Tool calls should be present"
+        );
         let tool_calls = choice.message.tool_calls.as_ref().unwrap();
         assert_eq!(tool_calls.len(), 2, "Expected 2 aggregated tool calls");
 
         // Verify first tool call (accumulated)
-        let tool1 = tool_calls.iter().find(|t| t.id == "call_abc123").expect("Tool call 'call_abc123' not found");
+        let tool1 = tool_calls
+            .iter()
+            .find(|t| t.id == "call_abc123")
+            .expect("Tool call 'call_abc123' not found");
         assert_eq!(tool1.r#type, ChatCompletionToolType::Function);
         assert_eq!(tool1.function.name, "get_weather");
-        assert_eq!(tool1.function.arguments, "{\"location\": \"San Francisco\"}");
+        assert_eq!(
+            tool1.function.arguments,
+            "{\"location\": \"San Francisco\"}"
+        );
 
         // Verify second tool call (single chunk)
-        let tool2 = tool_calls.iter().find(|t| t.id == "call_xyz789").expect("Tool call 'call_xyz789' not found");
+        let tool2 = tool_calls
+            .iter()
+            .find(|t| t.id == "call_xyz789")
+            .expect("Tool call 'call_xyz789' not found");
         assert_eq!(tool2.r#type, ChatCompletionToolType::Function);
         assert_eq!(tool2.function.name, "get_stock_price");
         assert_eq!(tool2.function.arguments, "{\"symbol\": \"NVDA\"}");
