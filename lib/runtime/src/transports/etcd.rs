@@ -27,8 +27,8 @@ use validator::Validate;
 use etcd_client::{
     Compare, CompareOp, GetOptions, PutOptions, Txn, TxnOp, TxnOpResponse, WatchOptions, Watcher,
 };
-
 pub use etcd_client::{ConnectOptions, KeyValue, LeaseClient};
+use tokio::time::{Duration, Interval};
 
 mod lease;
 use lease::*;
@@ -41,8 +41,6 @@ pub struct Client {
     client: etcd_client::Client,
     primary_lease: i64,
     runtime: Runtime,
-    watcher_map:
-        Arc<Mutex<HashMap<String, (broadcast::Sender<WatchEvent>, tokio::task::JoinHandle<()>)>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,13 +113,11 @@ impl Client {
         } else {
             0
         };
-        let watcher_map = Arc::new(Mutex::new(HashMap::new()));
 
         Ok(Client {
             client,
             primary_lease: lease_id,
             runtime,
-            watcher_map: watcher_map,
         })
     }
 
@@ -261,93 +257,81 @@ impl Client {
         prefix: impl AsRef<str> + std::fmt::Display,
     ) -> Result<PrefixWatcher> {
         let key = prefix.as_ref().to_string();
-        // Lock the map and remove any senders with no active subscribers
-        let mut map = self.watcher_map.lock().await;
-        let dead: Vec<_> = map
-            .iter()
-            .filter(|(_, (tx, _))| tx.receiver_count() == 0)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for k in dead {
-            let (_, handle) = map.remove(&k).unwrap();
-            handle.abort();
-        }
 
-        // If there’s not already a watcher for this prefix, create one
-        if !map.contains_key(&key) {
-            // Create a broadcast channel to fan‐out WatchEvent to any number of subscribers
-            let (tx, _) = broadcast::channel(2048);
+        // Create a broadcast channel to fan‐out WatchEvent to any number of subscribers
+        let (tx, _) = broadcast::channel(2048);
+        let rx = tx.subscribe();
 
-            // Perform initial prefix GET
-            let mut kv_client = self.client.kv_client();
-            let mut watch_client = self.client.watch_client();
+        // Perform initial prefix GET
+        let mut kv_client = self.client.kv_client();
+        let mut watch_client = self.client.watch_client();
 
-            let mut get_response = kv_client
-                .get(prefix.as_ref(), Some(GetOptions::new().with_prefix()))
-                .await?;
+        let mut get_response = kv_client
+            .get(prefix.as_ref(), Some(GetOptions::new().with_prefix()))
+            .await?;
 
-            // Compute the revision to start watching from
-            let start_revision = get_response
-                .header()
-                .ok_or(error!("missing header; unable to get revision"))?
-                .revision()
-                + 1;
+        // Compute the revision to start watching from
+        let start_revision = get_response
+            .header()
+            .ok_or(error!("missing header; unable to get revision"))?
+            .revision()
+            + 1;
 
-            tracing::trace!("{}: start_revision: {}", prefix, start_revision);
+        tracing::trace!("{}: start_revision: {}", prefix, start_revision);
 
-            // Open the etcd watch
-            let (_watcher, mut watch_stream) = watch_client
-                .watch(
-                    prefix.as_ref(),
-                    Some(
-                        WatchOptions::new()
-                            .with_prefix()
-                            .with_start_revision(start_revision)
-                            .with_prev_key(),
-                    ),
-                )
-                .await?;
+        // Open the etcd watch
+        let (_watcher, mut watch_stream) = watch_client
+            .watch(
+                prefix.as_ref(),
+                Some(
+                    WatchOptions::new()
+                        .with_prefix()
+                        .with_start_revision(start_revision)
+                        .with_prev_key(),
+                ),
+            )
+            .await?;
 
-            // Clone the sender for use in the background task
-            let tx_clone = tx.clone();
+        // Clone the sender for use in the background task
+        let tx_clone = tx.clone();
 
-            // Snapshot initial key-values and then stream updates
-            let initial_kvs = get_response.take_kvs();
-            let rt_handle = self.runtime.secondary().clone();
-            let handle = rt_handle.spawn(async move {
-                // Send the initial batch of key-values
-                for kv in initial_kvs {
-                    let _ = tx_clone.send(WatchEvent::Put(kv.clone()));
-                }
-                // Then forward live watch events
-                while let Some(Ok(resp)) = watch_stream.next().await {
-                    for ev in resp.events() {
-                        let evt = match ev.event_type() {
-                            etcd_client::EventType::Put => {
-                                WatchEvent::Put(ev.kv().unwrap().clone())
+        // Snapshot initial key-values and then stream updates
+        let initial_kvs = get_response.take_kvs();
+        let rt_handle = self.runtime.secondary().clone();
+
+        rt_handle.spawn(async move {
+            for kv in initial_kvs { let _ = tx_clone.send(WatchEvent::Put(kv.clone())); }
+            let mut ticker: Interval = tokio::time::interval(Duration::from_secs(15));
+
+            loop {
+                tokio::select! {
+                    maybe_resp = watch_stream.next() => {
+                        if let Some(Ok(resp)) = maybe_resp {
+                            for ev in resp.events() {
+                                let evt = match ev.event_type() {
+                                    etcd_client::EventType::Put    => WatchEvent::Put(ev.kv().unwrap().clone()),
+                                    etcd_client::EventType::Delete => WatchEvent::Delete(ev.kv().unwrap().clone()),
+                                };
+                                let _ = tx_clone.send(evt);
                             }
-                            etcd_client::EventType::Delete => {
-                                WatchEvent::Delete(ev.kv().unwrap().clone())
+                            if tx_clone.receiver_count() == 0 {
+                                break;
                             }
-                        };
-                        let _ = tx_clone.send(evt);
+                            continue;
+                        }
+                        // stream ended or errored
+                        break;
+                    }
+
+                    _ = ticker.tick() => {
+                        // check if someboody is still listening to break out of async task
+                        if tx_clone.receiver_count() == 0 {
+                            break;
+                        }
                     }
                 }
-            });
-
-            // Store the sender in our map so we don’t spawn a second watcher
-            map.insert(key.clone(), (tx, handle));
-        }
-
-        // Subscribe to the existing broadcast channel
-        let (sender, _) = map.get(&key).unwrap();
-        let rx = sender.subscribe();
-        tracing::info!( // todo: move to debug once subscriber sharing is fixed
-            "{}: watching prefix {} with number of subscribers: {}",
-            key,
-            prefix,
-            sender.receiver_count()
-        );
+            }
+        });
 
         Ok(PrefixWatcher { prefix: key, rx })
     }
