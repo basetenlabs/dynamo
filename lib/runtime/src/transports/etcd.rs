@@ -342,7 +342,7 @@ impl Client {
         // Subscribe to the existing broadcast channel
         let (sender, _) = map.get(&key).unwrap();
         let rx = sender.subscribe();
-        tracing::info!(
+        tracing::info!( // todo: move to debug once subscriber sharing is fixed
             "{}: watching prefix {} with number of subscribers: {}",
             key,
             prefix,
