@@ -104,11 +104,14 @@ pub async fn model_watcher(state: Arc<ModelWatchState>, mut events_rx: Receiver<
                         Err(e) => {
                             tracing::error!("error removing model: {}", e);
                         }
-                    }
+                    },
                 }
             }
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                tracing::warn!("model_watcher missed {} events; ; This should never happen. Continuing", skipped);
+                tracing::warn!(
+                    "model_watcher missed {} events; ; This should never happen. Continuing",
+                    skipped
+                );
                 continue;
             }
 

@@ -23,7 +23,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use tokio::{net::unix::pipe::Receiver, sync::{Mutex, broadcast}};
+use tokio::{
+    net::unix::pipe::Receiver,
+    sync::{broadcast, Mutex},
+};
 
 use crate::{pipeline::async_trait, transports::etcd::WatchEvent, Error};
 
