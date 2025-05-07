@@ -67,7 +67,7 @@ pub async fn run(
                     tracing::info!("Waiting for remote model at {network_prefix}");
                     let models_watcher =
                         etcd_client.kv_get_and_watch_prefix(network_prefix).await?;
-                    let (_prefix, _watcher, receiver) = models_watcher.dissolve();
+                    let (_prefix, receiver) = models_watcher.dissolve();
                     let _watcher_task = tokio::spawn(discovery::model_watcher(state, receiver));
                 }
                 None => {
