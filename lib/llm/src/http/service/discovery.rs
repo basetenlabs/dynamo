@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::broadcast::{self, Receiver};
 
 use dynamo_runtime::{
     protocols::{self, annotated::Annotated},
@@ -58,51 +58,64 @@ pub struct ModelWatchState {
 pub async fn model_watcher(state: Arc<ModelWatchState>, mut events_rx: Receiver<WatchEvent>) {
     tracing::debug!("model watcher started");
 
-    while let Some(event) = events_rx.recv().await {
-        match event {
-            WatchEvent::Put(kv) => {
-                let key = match kv.key_str() {
-                    Ok(key) => key,
-                    Err(err) => {
-                        tracing::error!(%err, ?kv, "Invalid UTF8 in model key");
-                        continue;
-                    }
-                };
-                tracing::debug!(key, "adding model");
+    loop {
+        match events_rx.recv().await {
+            Ok(event) => {
+                match event {
+                    WatchEvent::Put(kv) => {
+                        let key = match kv.key_str() {
+                            Ok(key) => key,
+                            Err(err) => {
+                                tracing::error!(%err, ?kv, "Invalid UTF8 in model key");
+                                continue;
+                            }
+                        };
+                        tracing::debug!(key, "adding model");
 
-                // model_entry.name is the service name (e.g. "Llama-3.2-3B-Instruct")
-                let model_entry = match serde_json::from_slice::<ModelEntry>(kv.value()) {
-                    Ok(model_entry) => model_entry,
-                    Err(err) => {
-                        tracing::error!(%err, ?kv, "Invalid JSON in model entry");
-                        continue;
-                    }
-                };
-                if state.manager.has_model_any(&model_entry.name) {
-                    tracing::trace!(
-                        service_name = model_entry.name,
-                        "New endpoint for existing model"
-                    );
-                    continue;
-                }
+                        // model_entry.name is the service name (e.g. "Llama-3.2-3B-Instruct")
+                        let model_entry = match serde_json::from_slice::<ModelEntry>(kv.value()) {
+                            Ok(model_entry) => model_entry,
+                            Err(err) => {
+                                tracing::error!(%err, ?kv, "Invalid JSON in model entry");
+                                continue;
+                            }
+                        };
+                        if state.manager.has_model_any(&model_entry.name) {
+                            tracing::trace!(
+                                service_name = model_entry.name,
+                                "New endpoint for existing model"
+                            );
+                            continue;
+                        }
 
-                match handle_put(model_entry, state.clone()).await {
-                    Ok((model_name, model_type)) => {
-                        tracing::info!("added {} model: {}", model_type, model_name);
+                        match handle_put(model_entry, state.clone()).await {
+                            Ok((model_name, model_type)) => {
+                                tracing::info!("added {} model: {}", model_type, model_name);
+                            }
+                            Err(e) => {
+                                tracing::error!("error adding model: {}", e);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        tracing::error!("error adding model: {}", e);
+                    WatchEvent::Delete(kv) => match handle_delete(&kv, state.clone()).await {
+                        Ok((model_name, model_type)) => {
+                            tracing::info!("removed {} model: {}", model_type, model_name);
+                        }
+                        Err(e) => {
+                            tracing::error!("error removing model: {}", e);
+                        }
                     }
                 }
             }
-            WatchEvent::Delete(kv) => match handle_delete(&kv, state.clone()).await {
-                Ok((model_name, model_type)) => {
-                    tracing::info!("removed {} model: {}", model_type, model_name);
-                }
-                Err(e) => {
-                    tracing::error!("error removing model: {}", e);
-                }
-            },
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!("model_watcher missed {} events; ; This should never happen. Continuing", skipped);
+                continue;
+            }
+
+            Err(broadcast::error::RecvError::Closed) => {
+                tracing::debug!("model_watcher channel closed; exiting");
+                break;
+            }
         }
     }
 }

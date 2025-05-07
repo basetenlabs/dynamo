@@ -23,7 +23,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use tokio::{net::unix::pipe::Receiver, sync::Mutex};
+use tokio::{net::unix::pipe::Receiver, sync::{Mutex, broadcast}};
 
 use crate::{pipeline::async_trait, transports::etcd::WatchEvent, Error};
 
@@ -101,7 +101,7 @@ where
             .kv_get_and_watch_prefix(endpoint.etcd_path())
             .await?;
 
-        let (prefix, _watcher, mut kv_event_rx) = prefix_watcher.dissolve();
+        let (prefix, mut kv_event_rx) = prefix_watcher.dissolve();
 
         let (watch_tx, watch_rx) = tokio::sync::watch::channel(vec![]);
 
@@ -122,8 +122,12 @@ where
                     }
                     kv_event = kv_event_rx.recv() => {
                         match kv_event {
-                            Some(kv_event) => kv_event,
-                            None => {
+                            Ok(kv_event) => kv_event,
+                            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!("model_watcher missed {} events; continuing", skipped);
+                               continue;
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
                                 tracing::debug!("watch stream has closed; shutting down endpoint watcher for prefix: {}", prefix);
                                 break;
                             }

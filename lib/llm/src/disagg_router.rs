@@ -20,6 +20,7 @@ use tracing;
 
 use dynamo_runtime::transports::etcd::WatchEvent;
 use dynamo_runtime::DistributedRuntime;
+use tokio::sync::broadcast;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DisaggRouterConf {
@@ -85,7 +86,7 @@ impl DisaggRouterConf {
 
         // Set up the watcher after getting the initial value
         let prefix_watcher = etcd_client.kv_get_and_watch_prefix(&etcd_key).await?;
-        let (key, _watcher, mut kv_event_rx) = prefix_watcher.dissolve();
+        let (key, mut kv_event_rx) = prefix_watcher.dissolve();
 
         // Spawn background task to watch for config changes
         drt.runtime().secondary().spawn(async move {
@@ -99,9 +100,13 @@ impl DisaggRouterConf {
                     }
                     kv_event = kv_event_rx.recv() => {
                         match kv_event {
-                            Some(kv_event) => kv_event,
-                            None => {
-                                tracing::debug!("Watch stream has closed; shutting down config watcher for key: {}", key);
+                            Ok(kv_event) => kv_event,
+                            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!("Config watcher missed {} events; This should never happen. Continuing", skipped);
+                                continue;
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                tracing::debug!("Config watcher channel closed; exiting");
                                 break;
                             }
                         }

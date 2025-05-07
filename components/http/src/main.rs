@@ -93,7 +93,7 @@ async fn app(runtime: Runtime) -> Result<()> {
             let models_watcher: PrefixWatcher =
                 etcd_client.kv_get_and_watch_prefix(etcd_path).await?;
 
-            let (_prefix, _watcher, receiver) = models_watcher.dissolve();
+            let (_prefix, receiver) = models_watcher.dissolve();
             let watcher_task = tokio::spawn(model_watcher(state, receiver));
             watcher_tasks.push(watcher_task);
         }
