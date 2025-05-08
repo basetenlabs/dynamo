@@ -20,6 +20,13 @@ from vllm.utils import FlexibleArgumentParser
 from dynamo.sdk.lib.config import ServiceConfig
 
 
+class RouterType:
+    RANDOM = "random"
+    ROUND_ROBIN = "round-robin"
+    KV = "kv"
+    KV_LOAD = "kv-load"
+
+
 def parse_vllm_args(service_name, prefix) -> AsyncEngineArgs:
     config = ServiceConfig.get_instance()
     vllm_args = config.as_args(service_name, prefix=prefix)
@@ -27,9 +34,20 @@ def parse_vllm_args(service_name, prefix) -> AsyncEngineArgs:
     parser.add_argument(
         "--router",
         type=str,
-        choices=["random", "round-robin", "kv"],
-        default="random",
+        choices=[
+            RouterType.RANDOM,
+            RouterType.ROUND_ROBIN,
+            RouterType.KV,
+            RouterType.KV_LOAD,
+        ],
+        default=RouterType.RANDOM,
         help="Router type to use for scheduling requests to workers",
+    )
+    parser.add_argument(
+        "--router-num-threads",
+        type=int,
+        default=4,
+        help="Number of threads to use for the router to process the requests",
     )
     parser.add_argument(
         "--remote-prefill", action="store_true", help="Enable remote prefill"
@@ -55,6 +73,7 @@ def parse_vllm_args(service_name, prefix) -> AsyncEngineArgs:
     args = parser.parse_args(vllm_args)
     engine_args = AsyncEngineArgs.from_cli_args(args)
     engine_args.router = args.router
+    engine_args.router_num_threads = args.router_num_threads
     engine_args.remote_prefill = args.remote_prefill
     engine_args.conditional_disagg = args.conditional_disagg
     engine_args.max_local_prefill_length = args.max_local_prefill_length

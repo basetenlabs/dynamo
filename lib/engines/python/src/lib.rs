@@ -37,8 +37,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot::Sender;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
-use dynamo_llm::backend::ExecutionContext;
-use dynamo_llm::types::openai::chat_completions::OpenAIChatCompletionsStreamingEngine;
+use dynamo_llm::engines::{EngineDispatcher, StreamingEngine};
 
 /// Python snippet to import a file as a module
 const PY_IMPORT: &CStr = cr#"
@@ -75,7 +74,7 @@ pub async fn make_string_engine(
     cancel_token: CancellationToken,
     py_file: &Path,
     py_args: Vec<String>,
-) -> pipeline_error::Result<OpenAIChatCompletionsStreamingEngine> {
+) -> pipeline_error::Result<Arc<dyn StreamingEngine>> {
     pyo3::prepare_freethreaded_python();
     if let Ok(venv) = env::var("VIRTUAL_ENV") {
         Python::with_gil(|py| {
@@ -86,27 +85,7 @@ pub async fn make_string_engine(
     }
 
     let engine = new_engine(cancel_token, py_file, py_args).await?;
-    let engine: OpenAIChatCompletionsStreamingEngine = Arc::new(engine);
-    Ok(engine)
-}
-
-/// An engine that takes and returns tokens.
-pub async fn make_token_engine(
-    cancel_token: CancellationToken,
-    py_file: &Path,
-    py_args: Vec<String>,
-) -> pipeline_error::Result<ExecutionContext> {
-    pyo3::prepare_freethreaded_python();
-    if let Ok(venv) = env::var("VIRTUAL_ENV") {
-        Python::with_gil(|py| {
-            if let Err(e) = fix_venv(venv, py) {
-                tracing::warn!("failed to fix venv: {}", e);
-            }
-        });
-    }
-
-    let engine = new_engine(cancel_token, py_file, py_args).await?;
-    let engine: ExecutionContext = Arc::new(engine);
+    let engine: Arc<dyn StreamingEngine> = Arc::new(EngineDispatcher::new(engine));
     Ok(engine)
 }
 
@@ -183,17 +162,6 @@ async fn new_engine(
     let user_module =
         python_file_to_module(py_file, py_args).with_context(|| py_file.display().to_string())?;
     let generator = Python::with_gil(|py| {
-        /* Leave commented, `initialize` may be needed to match Triton
-        if let Ok(initialize) = user_module.getattr(py, "initialize") {
-            initialize
-                .call1(py, (py_args,))
-                .inspect_err(|err| {
-                    println!();
-                    err.display(py);
-                })
-                .with_context(|| "Failed calling python engine's initialize(args)")?;
-        };
-        */
         user_module
             .getattr(py, "generate")
             .with_context(|| "generate")

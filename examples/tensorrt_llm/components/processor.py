@@ -19,7 +19,10 @@ import logging
 
 from common.chat_processor import ChatProcessorMixin
 from common.parser import parse_tensorrt_llm_args
-from common.protocol import DynamoTRTLLMChatCompletionRequest
+from common.protocol import (
+    DynamoTRTLLMChatCompletionRequest,
+    DynamoTRTLLMCompletionRequest,
+)
 from common.utils import RequestType
 from components.kv_router import Router
 from components.worker import TensorRTLLMWorker
@@ -82,7 +85,7 @@ class Processor(ChatProcessorMixin):
                 f" Current: {len(self.worker_client.endpoint_ids())},"
                 f" Required: {self.min_workers}"
             )
-            await asyncio.sleep(2)
+            await asyncio.sleep(30)
 
     async def _generate(self, raw_request, request_type: RequestType):
         raw_request.skip_special_tokens = False
@@ -153,10 +156,24 @@ class Processor(ChatProcessorMixin):
                     raise ValueError(
                         "max_tokens and max_completion_tokens must be the same"
                     )
+
+        # min_tokens isn't currently propagated through the Rust OpenAI HTTP frontend,
+        # and ignore_eos is passed through the 'nvext' field, so set both when found.
+        if raw_request.nvext:
+            ignore_eos = raw_request.nvext.get("ignore_eos")
+            raw_request.ignore_eos = ignore_eos
+            # If ignore_eos is True, set min_tokens to max_tokens to guarantee
+            # the full expected OSL for consistent benchmarking purposes.
+            if ignore_eos:
+                logger.debug(
+                    f"[preprocessor] `ignore_eos` detected, setting `min_tokens` to `max_completion_tokens`: {raw_request.max_completion_tokens}"
+                )
+                raw_request.min_tokens = raw_request.max_completion_tokens
+
         async for response in self._generate(raw_request, RequestType.CHAT):
             yield response
 
-    # @dynamo_endpoint()
-    # async def completions(self, raw_request):
-    #     async for response in self._generate(raw_request, RequestType.COMPLETION):
-    #         yield response
+    @dynamo_endpoint(name="completions")
+    async def completions(self, raw_request: DynamoTRTLLMCompletionRequest):
+        async for response in self._generate(raw_request, RequestType.COMPLETION):
+            yield response

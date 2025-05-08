@@ -22,7 +22,7 @@ use futures::StreamExt;
 use std::io::{ErrorKind, Write};
 
 use crate::input::common;
-use crate::{EngineConfig, Flags};
+use crate::{EngineConfig, Flags, RequestTemplate};
 
 /// Max response tokens for each single query. Must be less than model context size.
 /// TODO: Cmd line flag to overwrite this
@@ -33,19 +33,17 @@ pub async fn run(
     flags: Flags,
     single_prompt: Option<String>,
     engine_config: EngineConfig,
+    template: Option<RequestTemplate>,
 ) -> anyhow::Result<()> {
     let cancel_token = runtime.primary_token();
-    let (service_name, engine, inspect_template): (
-        String,
-        OpenAIChatCompletionsStreamingEngine,
-        bool,
-    ) = common::prepare_engine(runtime, flags, engine_config).await?;
+    let prepared_engine = common::prepare_engine(runtime, flags, engine_config).await?;
     main_loop(
         cancel_token,
-        &service_name,
-        engine,
+        &prepared_engine.service_name,
+        prepared_engine.engine,
         single_prompt,
-        inspect_template,
+        prepared_engine.inspect_template,
+        template,
     )
     .await
 }
@@ -56,6 +54,7 @@ async fn main_loop(
     engine: OpenAIChatCompletionsStreamingEngine,
     mut initial_prompt: Option<String>,
     _inspect_template: bool,
+    template: Option<RequestTemplate>,
 ) -> anyhow::Result<()> {
     if initial_prompt.is_none() {
         tracing::info!("Ctrl-c to exit");
@@ -101,14 +100,21 @@ async fn main_loop(
             },
         );
         messages.push(user_message);
-
         // Request
         let inner = async_openai::types::CreateChatCompletionRequestArgs::default()
             .messages(messages.clone())
-            .model(service_name)
+            .model(
+                template
+                    .as_ref()
+                    .map_or_else(|| service_name.to_string(), |t| t.model.clone()),
+            )
             .stream(true)
-            .max_completion_tokens(MAX_TOKENS)
-            .temperature(0.7)
+            .max_completion_tokens(
+                template
+                    .as_ref()
+                    .map_or(MAX_TOKENS, |t| t.max_completion_tokens),
+            )
+            .temperature(template.as_ref().map_or(0.7, |t| t.temperature))
             .n(1) // only generate one response
             .build()?;
         let nvext = NvExt {
@@ -185,6 +191,7 @@ async fn main_loop(
             break;
         }
     }
+    cancel_token.cancel(); // stop everything else
     println!();
     Ok(())
 }

@@ -86,18 +86,7 @@ Once you've built and pushed the components, you can deploy the platform to your
 
 Before deploying Dynamo Cloud, ensure your Kubernetes cluster meets the following requirements:
 
-#### 1. 🛡️ Istio Installation
-Dynamo Cloud requires Istio for service mesh capabilities. Verify Istio is installed and running:
-
-```bash
-# Check if Istio is installed
-kubectl get pods -n istio-system
-
-# Expected output should show running Istio pods
-# istiod-* pods should be in Running state
-```
-
-#### 2. 💾 PVC Support with Default Storage Class
+#### 1. 💾 PVC Support with Default Storage Class
 Dynamo Cloud requires Persistent Volume Claim (PVC) support with a default storage class. Verify your cluster configuration:
 
 ```bash
@@ -121,18 +110,40 @@ export IMAGE_TAG=<TAG>  # Use the same tag you used when building the images
 export NAMESPACE=dynamo-cloud    # change this to whatever you want!
 ```
 
-2. [One-time Action] Create a new kubernetes namespace and set it as your default. Create image pull secrets if needed.
+> [!NOTE]
+> DOCKER_USERNAME and DOCKER_PASSWORD are optional and only needed if you want to pull docker images from a private registry.
+> A docker image pull secret will be created automatically if these variables are set. Its name will be `docker-imagepullsecret` unless overridden by the `DOCKER_SECRET_NAME` environment variable.
+
+The Dynamo Cloud Platform auto-generates docker images for pipelines and pushes them to a container registry.
+By default, the platform will use the same container registry as the platform components (specified by `DOCKER_SERVER`).
+However, you can specify a different container registry for pipelines by additionally setting the following environment variables:
 
 ```bash
-cd deploy/dynamo/helm
+export PIPELINES_DOCKER_SERVER=<your-docker-server>
+export PIPELINES_DOCKER_USERNAME=<your-docker-username>
+export PIPELINES_DOCKER_PASSWORD=<your-docker-password>
+```
+
+If you wish to expose your Dynamo Cloud Platform externally, you can setup the following environment variables:
+
+```bash
+# if using ingress
+export INGRESS_ENABLED="true"
+export INGRESS_CLASS="nginx" # or whatever ingress class you have configured
+
+# if using istio
+export ISTIO_ENABLED="true"
+export ISTIO_GATEWAY="istio-system/istio-ingressgateway" # or whatever istio gateway you have configured
+```
+
+Running the installation script with `--interactive` will guide you through the process of exposing your Dynamo Cloud Platform externally if you don't want to set these environment variables manually.
+
+2. [One-time Action] Create a new kubernetes namespace and set it as your default.
+
+```bash
+cd deploy/cloud/helm
 kubectl create namespace $NAMESPACE
 kubectl config set-context --current --namespace=$NAMESPACE
-
-kubectl create secret docker-registry docker-imagepullsecret \
-  --docker-server=$DOCKER_SERVER \
-  --docker-username=$DOCKER_USERNAME \
-  --docker-password=$DOCKER_PASSWORD \
-  --namespace=$NAMESPACE
 ```
 
 3. Deploy the helm chart using the deploy script:
@@ -141,9 +152,23 @@ kubectl create secret docker-registry docker-imagepullsecret \
 ./deploy.sh
 ```
 
+if you wish to be guided through the deployment process, you can run the deploy script with the `--interactive` flag:
+
+```bash
+./deploy.sh --interactive
+```
+
 4. 🌐 **Expose Dynamo Cloud Externally**
 
-You must also expose the `dynamo-store` service within the namespace externally. This will be the endpoint the CLI uses to interface with Dynamo Cloud. You might setup an Ingress, use an `ExternalService` with Istio, or simply port-forward. In our docs, we refer to this externally available endpoint as `DYNAMO_CLOUD`.
+> [!NOTE]
+> The script will automatically display information about the endpoint you can use to access Dynamo Cloud. In our docs, we refer to this externally available endpoint as `DYNAMO_CLOUD`.
+
+The simplest way to expose the `dynamo-store` service within the namespace externally is to use a port-forward:
+
+```bash
+kubectl port-forward svc/dynamo-store <local-port>:80 -n $NAMESPACE
+export DYNAMO_CLOUD=http://localhost:<local-port>
+```
 
 ## 🎯 Next Steps
 

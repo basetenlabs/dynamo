@@ -17,6 +17,7 @@ use anyhow::Context as _;
 use async_openai::types::FinishReason;
 use dynamo_llm::model_card::model::ModelDeploymentCard;
 use dynamo_llm::preprocessor::OpenAIPreprocessor;
+use dynamo_llm::request_template::RequestTemplate;
 use dynamo_llm::types::openai::chat_completions::{
     NvCreateChatCompletionRequest, OpenAIChatCompletionsStreamingEngine,
 };
@@ -65,9 +66,10 @@ struct Entry {
 pub async fn run(
     runtime: Runtime,
     flags: Flags,
-    maybe_card: Option<ModelDeploymentCard>,
+    card: ModelDeploymentCard,
     input_jsonl: PathBuf,
     engine_config: EngineConfig,
+    template: Option<RequestTemplate>,
 ) -> anyhow::Result<()> {
     let cancel_token = runtime.primary_token();
     // Check if the path exists and is a directory
@@ -78,11 +80,10 @@ pub async fn run(
         );
     }
 
-    let (service_name, engine, _inspect_template) =
-        common::prepare_engine(runtime, flags, engine_config).await?;
-    let service_name_ref = Arc::new(service_name);
+    let prepared_engine = common::prepare_engine(runtime, flags, engine_config).await?;
+    let service_name_ref = Arc::new(prepared_engine.service_name);
 
-    let pre_processor = if let Some(card) = maybe_card {
+    let pre_processor = if card.has_tokenizer() {
         Some(OpenAIPreprocessor::new(card).await?)
     } else {
         None
@@ -109,6 +110,7 @@ pub async fn run(
     tracing::info!("Timer start.");
     let start = Instant::now();
     let mut lines = buffered_input.lines();
+    let template: Option<Arc<RequestTemplate>> = template.map(Arc::new);
     while let Ok(Some(line)) = lines.next_line().await {
         if cancel_token.is_cancelled() {
             break;
@@ -126,22 +128,30 @@ pub async fn run(
         };
         entry.request_id = request_id;
 
-        let engine = engine.clone();
+        let engine = prepared_engine.engine.clone();
         let pre_processor = pre_processor.clone();
         let tokens_in = tokens_in.clone();
         let tokens_out = tokens_out.clone();
         let done_entries_tx = done_entries_tx.clone();
         let service_name_ref = service_name_ref.clone();
+        let template_clone = template.clone();
         let handle = tokio::spawn(async move {
             let local_start = Instant::now();
-            let response =
-                match evaluate(request_id, service_name_ref.as_str(), engine, &mut entry).await {
-                    Ok(r) => r,
-                    Err(err) => {
-                        tracing::error!(%err, entry.text, "Failed evaluating prompt");
-                        return;
-                    }
-                };
+            let response = match evaluate(
+                request_id,
+                service_name_ref.as_str(),
+                engine,
+                &mut entry,
+                template_clone,
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(err) => {
+                    tracing::error!(%err, entry.text, "Failed evaluating prompt");
+                    return;
+                }
+            };
             let local_elapsed = Instant::now() - local_start;
             entry.elapsed_ms = local_elapsed.as_millis() as usize;
 
@@ -192,6 +202,7 @@ pub async fn run(
         tokens_out,
         tokens_out / cmp::max(elapsed.as_secs(), 1),
     );
+    cancel_token.cancel(); // stop everything else
 
     Ok(())
 }
@@ -202,6 +213,7 @@ async fn evaluate(
     service_name: &str,
     engine: OpenAIChatCompletionsStreamingEngine,
     entry: &mut Entry,
+    template: Option<Arc<RequestTemplate>>,
 ) -> anyhow::Result<String> {
     let user_message = async_openai::types::ChatCompletionRequestMessage::User(
         async_openai::types::ChatCompletionRequestUserMessage {
@@ -213,9 +225,18 @@ async fn evaluate(
     );
     let inner = async_openai::types::CreateChatCompletionRequestArgs::default()
         .messages(vec![user_message])
-        .model(service_name)
+        .model(
+            template
+                .as_ref()
+                .map_or_else(|| service_name.to_string(), |t| t.model.clone()),
+        )
         .stream(true)
-        .max_completion_tokens(MAX_TOKENS)
+        .max_completion_tokens(
+            template
+                .as_ref()
+                .map_or(MAX_TOKENS, |t| t.max_completion_tokens),
+        )
+        .temperature(template.as_ref().map_or(0.7, |t| t.temperature))
         .build()?;
     let req = NvCreateChatCompletionRequest { inner, nvext: None };
     let mut stream = engine.generate(Context::new(req)).await?;

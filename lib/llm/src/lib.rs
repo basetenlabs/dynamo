@@ -25,15 +25,21 @@ pub mod disagg_router;
 pub mod engines;
 pub mod gguf;
 pub mod http;
+pub mod hub;
+pub mod key_value_store;
 pub mod kv_router;
+mod local_model;
 pub mod model_card;
 pub mod model_type;
 pub mod preprocessor;
 pub mod protocols;
 pub mod recorder;
+pub mod request_template;
 pub mod tokenizers;
 pub mod tokens;
 pub mod types;
+
+pub use local_model::LocalModel;
 
 #[cfg(feature = "cuda_kv")]
 pub mod kv;

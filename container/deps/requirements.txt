@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+accelerate==1.6.0
 fastapi==0.115.6
 ftfy
 grpcio-tools==1.66.0
@@ -30,6 +31,8 @@ pydantic==2.7.1
 pyright
 PyYAML
 sentencepiece
+tensorboard==2.19.0
+tensorboardX==2.6.2.2
 transformers
 tritonclient==2.53.0
 types-PyYAML

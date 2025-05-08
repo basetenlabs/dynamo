@@ -48,6 +48,7 @@ use super::{
 };
 
 use crate::pipeline::network::{ingress::push_endpoint::PushEndpoint, PushWorkHandler};
+use crate::protocols::Endpoint as EndpointId;
 use async_nats::{
     rustls::quic,
     service::{Service, ServiceExt},
@@ -68,7 +69,7 @@ mod namespace;
 mod registry;
 pub mod service;
 
-pub use client::{Client, RouterMode};
+pub use client::{Client, EndpointSource};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -94,6 +95,12 @@ pub struct ComponentEndpointInfo {
     pub namespace: String,
     pub lease_id: i64,
     pub transport: TransportType,
+}
+
+impl ComponentEndpointInfo {
+    pub fn id(&self) -> i64 {
+        self.lease_id
+    }
 }
 
 /// A [Component] a discoverable entity in the distributed runtime.
@@ -149,7 +156,7 @@ impl Component {
 
     pub fn service_name(&self) -> String {
         let service_name = format!("{}_{}", self.namespace.name(), self.name);
-        Slug::slugify_unique(&service_name).to_string()
+        Slug::slugify(&service_name).to_string()
     }
 
     pub fn path(&self) -> String {
@@ -158,6 +165,10 @@ impl Component {
 
     pub fn namespace(&self) -> &Namespace {
         &self.namespace
+    }
+
+    pub fn name(&self) -> String {
+        self.name.clone()
     }
 
     pub fn endpoint(&self, endpoint: impl Into<String>) -> Endpoint {
@@ -227,6 +238,14 @@ impl RuntimeProvider for Endpoint {
 }
 
 impl Endpoint {
+    pub fn id(&self) -> EndpointId {
+        EndpointId {
+            namespace: self.component.namespace().name().to_string(),
+            component: self.component.name().to_string(),
+            name: self.name().to_string(),
+        }
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -272,11 +291,7 @@ impl Endpoint {
         )
     }
 
-    pub async fn client<Req, Resp>(&self) -> Result<client::Client<Req, Resp>>
-    where
-        Req: Serialize + Send + Sync + 'static,
-        Resp: for<'de> Deserialize<'de> + Send + Sync + 'static,
-    {
+    pub async fn client(&self) -> Result<client::Client> {
         if self.is_static {
             client::Client::new_static(self.clone()).await
         } else {
