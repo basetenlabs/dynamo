@@ -251,7 +251,7 @@ async fn completions(
 async fn chat_completions(
     State((state, template)): State<(Arc<DeploymentState>, Option<RequestTemplate>)>,
     headers: HeaderMap,
-    Json(request): Json<NvCreateChatCompletionRequest>,
+    Json(mut request): Json<NvCreateChatCompletionRequest>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     // return a 503 if the service is not ready
     check_ready(&state)?;
