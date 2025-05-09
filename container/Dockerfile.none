@@ -60,6 +60,7 @@ RUN uv build --wheel --out-dir /workspace/dist && \
 
 # Baseten(Michael): rm venv and remove build artifacts
 RUN cd /workspace/lib/bindings/python && \
-    uv build --wheel --out-dir /workspace/dist --python 3.12
+    uv build --wheel --out-dir /workspace/dist --python 3.12 && \
+    uv build --wheel --out-dir /workspace/dist --python 3.10 && \
+    rm -rf /workspace/target/release/deps && rm -rf /workspace/target/debug/deps && rm -rf /workspace/target/release/build
 RUN rm -rf /workspace/.venv
-RUN rm -rf /workspace/target/release/deps && rm -rf /workspace/target/debug/deps && rm -rf /workspace/target/release/build
