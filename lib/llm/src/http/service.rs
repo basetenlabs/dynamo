@@ -203,7 +203,12 @@ impl DeploymentState {
             chat_completion_engines: Arc::new(Mutex::new(ModelEngines::default())),
             metrics: Arc::new(Metrics::default()),
             sse_keep_alive: None,
-            max_mean_duration_s_low_priority: Duration::from_secs(30), 
+            max_mean_duration_s_low_priority: Duration::from_secs(
+                std::env::var("MAX_MEAN_DURATION_S_LOW_PRIORITY")
+                    .unwrap_or_else(|_| "60".to_string())
+                    .parse()
+                    .unwrap_or(60),
+            ),
         }
     }
 
