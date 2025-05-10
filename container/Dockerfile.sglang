@@ -26,6 +26,8 @@ FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS build
 
 USER root
 
+RUN rm -rf /workspace/sglang && cd /workspace && git clone -b zhyncs/revert https://github.com/sgl-project/sglang && cd -
+
 # Install utilities
 RUN apt update -y && apt install -y git wget curl nvtop tmux vim
 # nats
