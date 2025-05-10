@@ -193,6 +193,7 @@ pub struct DeploymentState {
     chat_completion_engines: Arc<Mutex<ModelEngines<OpenAIChatCompletionsStreamingEngine>>>,
     metrics: Arc<Metrics>,
     sse_keep_alive: Option<Duration>,
+    pub max_mean_duration_s_low_priority: Duration, 
 }
 
 impl DeploymentState {
@@ -202,6 +203,7 @@ impl DeploymentState {
             chat_completion_engines: Arc::new(Mutex::new(ModelEngines::default())),
             metrics: Arc::new(Metrics::default()),
             sse_keep_alive: None,
+            max_mean_duration_s_low_priority: Duration::from_secs(30), 
         }
     }
 

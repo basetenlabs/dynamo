@@ -15,7 +15,11 @@
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Router};
 use prometheus::{Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, Opts};
-use std::{sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 pub use prometheus::Registry;
 
@@ -37,6 +41,7 @@ pub struct Metrics {
     request_counter: IntCounterVec,
     inflight_gauge: IntGaugeVec,
     request_duration: HistogramVec,
+    recent_completions_per_model: Mutex<HashMap<String, VecDeque<(Instant, Duration)>>>,
 }
 
 /// RAII object for inflight gauge and request counters
@@ -124,7 +129,69 @@ impl Metrics {
             request_counter,
             inflight_gauge,
             request_duration,
+            recent_completions_per_model: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Records a completed request's duration for a specific model.
+    /// Keeps only records from the last 60 seconds.
+    pub fn record_completion(&self, model: &str, duration: Duration) {
+        let mut per_model_completions = self.recent_completions_per_model.lock().unwrap();
+        let model_completions = per_model_completions
+            .entry(model.to_string())
+            .or_insert_with(VecDeque::new);
+
+        let now = Instant::now();
+        model_completions.push_back((now, duration));
+    }
+
+    /// Checks if a model should be rate-limited based on recent performance.
+    /// Conditions: >10 requests in the last 60s AND average duration > 34s.
+    pub fn get_recent_e2e_times(&self, model: &str) -> (Option<Duration>, Option<Duration>) {
+        let mut per_model_completions_guard = self.recent_completions_per_model.lock().unwrap();
+
+        if let Some(model_completions) = per_model_completions_guard.get_mut(model) {
+            // Prune entries older than 60 seconds
+            let now = Instant::now();
+            let sixty_seconds_ago = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
+            while let Some((timestamp, _)) = model_completions.front() {
+                if *timestamp < sixty_seconds_ago {
+                    model_completions.pop_front();
+                } else {
+                    break;
+                }
+            }
+            if model_completions.is_empty() {
+                return (None, None);
+            }
+
+            let relevant_durations: Vec<Duration> = model_completions
+                .iter()
+                .map(|(_, duration)| *duration)
+                .collect();
+            drop(per_model_completions_guard);
+
+            
+            let total_duration_sum: Duration = relevant_durations.iter().sum();
+            let median_duration = {
+                let mut durations = relevant_durations.clone();
+                durations.sort();
+                let mid = durations.len() / 2;
+                if durations.len() % 2 == 0 {
+                    (durations[mid - 1] + durations[mid]) / 2 // panic here, if len is 0
+                } else {
+                    durations[mid]
+                }
+            };
+            
+            let average_duration = total_duration_sum / (relevant_durations.len() as u32);
+
+            return (
+                Some(average_duration),
+                Some(median_duration),
+            );
+        }
+        return (None, None);
     }
 
     /// Get the number of successful requests for the given dimensions:
@@ -263,11 +330,14 @@ impl Drop for InflightGuard {
             &self.status,
         );
 
+        let duration = self.timer.elapsed();
+        self.metrics.record_completion(&self.model, duration);
+
         // Record the duration of the request
         self.metrics
             .request_duration
             .with_label_values(&[&self.model])
-            .observe(self.timer.elapsed().as_secs_f64());
+            .observe(duration.as_secs_f64());
     }
 }
 
