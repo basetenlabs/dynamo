@@ -26,7 +26,14 @@ FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG} AS build
 
 USER root
 
-RUN rm -rf /workspace/sglang && cd /workspace && git clone -b zhyncs/revert https://github.com/sgl-project/sglang && cd -
+# Use the thinking budget revert
+RUN rm -rf /workspace/sglang \
+    && pushd /workspace \
+    && git clone https://github.com/sgl-project/sglang \
+    && cd sglang \
+    && git checkout 66fc63d6b115cb7fbea7a9454fa17856e74f1ee4 \
+    && pip3 install -e "python[all]" \
+    && popd
 
 # Install utilities
 RUN apt update -y && apt install -y git wget curl nvtop tmux vim
