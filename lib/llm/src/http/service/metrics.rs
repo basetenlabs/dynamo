@@ -555,43 +555,27 @@ async fn handler_health_model(
     Path(model_name): Path<String>,
 ) -> impl IntoResponse {
     let inflight = current_metrics.get_inflight_count(&model_name);
-    let (mean_time, median_time) = current_metrics.get_recent_ttfb_times(&model_name);
+    let (mean_ttfb, median_ttfb) = current_metrics.get_recent_ttfb_times(&model_name);
 
-    let response_body = match (inflight, mean_time, median_time) {
-        (0, None, None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                serde_json::to_string(&json!({
-                    "model_name": model_name,
-                    "data": {
-                        "inflight": inflight,
-                        "mean_ttfb": null,
-                        "median_ttfb": null,
-                    }
-                }))
-                .unwrap(),
-            )
-                .into_response();
-        }
-        (_, Some(mean), Some(median)) => serde_json::to_string(&json!({
+    let response_body = match (mean_ttfb, median_ttfb) {
+        (Some(mean_ttfb), Some(median_ttfb)) => serde_json::to_string(&json!({
             "model_name": model_name,
             "data": {
                 "inflight": inflight,
-                "mean_ttfb": mean.as_secs_f64(),
-                "median_ttfb": median.as_secs_f64()
+                "mean_ttfb": mean_ttfb.as_secs_f64(),
+                "median_ttfb": median_ttfb.as_secs_f64()
             }
         }))
         .unwrap(),
-        _ => {
-            return (
-                StatusCode::OK,
-                format!(
-                    "{{\"model_name\": \"{}\", \"data\": {{\"inflight\": {}, \"end2end_mean_time_secs\": null, \"end2end_median_time_secs\": null}}}}",
-                    model_name, inflight
-                ),
-            )
-                .into_response();
-        }
+        _ => serde_json::to_string(&json!({
+                "model_name": model_name,
+                "data": {
+                    "inflight": inflight,
+                    "mean_ttfb": mean_ttfb.unwrap_or_default().as_secs_f64(),
+                    "median_ttfb": median_ttfb.unwrap_or_default().as_secs_f64()
+                }
+            }))
+            .unwrap(),
     };
     (StatusCode::OK, response_body).into_response()
 }
