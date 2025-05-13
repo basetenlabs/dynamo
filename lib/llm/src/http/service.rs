@@ -193,7 +193,7 @@ pub struct DeploymentState {
     chat_completion_engines: Arc<Mutex<ModelEngines<OpenAIChatCompletionsStreamingEngine>>>,
     metrics: Arc<Metrics>,
     sse_keep_alive: Option<Duration>,
-    pub max_mean_duration_s_low_priority: Duration,
+    pub ttfb_low_priority_max: Duration,
 }
 
 impl DeploymentState {
@@ -203,13 +203,45 @@ impl DeploymentState {
             chat_completion_engines: Arc::new(Mutex::new(ModelEngines::default())),
             metrics: Arc::new(Metrics::default()),
             sse_keep_alive: None,
-            max_mean_duration_s_low_priority: Duration::from_secs(
-                std::env::var("MAX_MEAN_DURATION_S_LOW_PRIORITY")
-                    .unwrap_or_else(|_| "60".to_string())
+            ttfb_low_priority_max: Duration::from_secs(
+                std::env::var("MAX_TTFB_LOW_PRIORITY")
+                    .unwrap_or_else(|_| "30".to_string())
                     .parse()
-                    .unwrap_or(60),
+                    .unwrap_or(30),
             ),
         }
+    }
+
+    fn is_rate_limited(
+        &self,
+        model: &str,
+        priority: i32,
+    ) -> bool {
+        let (_, median_ttfb) = self
+            .metrics
+            .get_recent_ttfb_times(model);
+
+        if let Some(median_ttfb) = median_ttfb {
+            if median_ttfb >= self.ttfb_low_priority_max {
+                if priority > 100 {
+                    tracing::warn!(
+                        "Rejecting request for model {}: too slow recent requests time (current: {:?}, allowed max: {:?}).",
+                        model,
+                        median_ttfb,
+                        self.ttfb_low_priority_max
+                    );
+                    return true
+                } else {
+                    tracing::warn!(
+                        "Limited priority to < 100 for model {}: too slow recent requests time (current: {:?}, allowed max: {:?}).",
+                        model,
+                        median_ttfb,
+                        self.ttfb_low_priority_max
+                    );
+                }
+            }
+        }
+        false
     }
 
     fn get_completions_engine(

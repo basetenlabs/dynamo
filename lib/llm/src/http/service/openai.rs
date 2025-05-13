@@ -94,13 +94,13 @@ impl ErrorResponse {
 
     /// Too Many Requests Error
     /// This is returned when the service is busy due to too many inflight requests for a model.
-    pub fn too_many_requests(model_name: &str, number: i64) -> (StatusCode, Json<ErrorResponse>) {
+    pub fn too_many_requests(model_name: &str) -> (StatusCode, Json<ErrorResponse>) {
         (
             StatusCode::TOO_MANY_REQUESTS, // 429 Too Many Requests
             Json(ErrorResponse {
                 error: format!(
-                    "Too many inflight requests (={}) for model: {}. Please try again later.",
-                    number, model_name
+                    "Too slow inflight requests for model: {}. Please try again later.",
+                    model_name
                 ),
             }),
         )
@@ -209,31 +209,6 @@ async fn completions(
     // todo - when optional, if none, apply a default
     let model = &request_payload.inner.model;
 
-    // Check for backpressure before proceeding
-    let (mean, _) = state.metrics.get_recent_ttfb_times(model);
-    // rate limit based on mean e2e time, before attaching RAII guard
-    if mean >= Some(state.max_mean_duration_s_low_priority) {
-        if priority > 100 {
-            tracing::warn!(
-                "Rejecting request for model {}: too slow recent requests time (current: {:?}, allowed max: {:?}). Request ID: {}",
-                model,
-                mean,
-                state.max_mean_duration_s_low_priority,
-                request_id
-            );
-            let mean_val = mean.map(|d| d.as_secs() as i64).unwrap_or(-1); // Use -1 or similar to indicate unknown if None
-            return Err(ErrorResponse::too_many_requests(model, mean_val));
-        } else {
-            tracing::warn!(
-                "Limited priority <100 for model {}: too slow recent requests time (current: {:?}, allowed max: {:?}). Request ID: {}",
-                model,
-                mean,
-                state.max_mean_duration_s_low_priority,
-                request_id
-            );
-        }
-    }
-
     // todo - error handling should be more robust
     let engine = state
         .get_completions_engine(model)
@@ -241,6 +216,12 @@ async fn completions(
 
     // this will increment the inflight gauge for the model
     let mut inflight = state.create_inflight_guard(model, Endpoint::Completions, streaming);
+
+    // Check for backpressure before proceeding
+    if state.is_rate_limited(model, priority) {
+        inflight.mark_429();
+        return Ok(ErrorResponse::too_many_requests(model).into_response());
+    }
 
     // setup context
     // todo - inherit request_id from distributed trace details
@@ -329,29 +310,7 @@ async fn chat_completions(
     // todo - when optional, if none, apply a default
     let model = &request_payload.inner.model;
 
-    // Check for backpressure before proceeding
-    let (mean, _) = state.metrics.get_recent_ttfb_times(model);
-    if mean >= Some(state.max_mean_duration_s_low_priority) {
-        if priority > 100 {
-            tracing::warn!(
-                "Rejecting request for model {}: too slow recent requests time (current: {:?}, allowed max: {:?}). Request ID: {}",
-                model,
-                mean,
-                state.max_mean_duration_s_low_priority,
-                request_id
-            );
-            let mean_val = mean.map(|d| d.as_secs() as i64).unwrap_or(-1); // Use -1 or similar to indicate unknown if None
-            return Err(ErrorResponse::too_many_requests(model, mean_val));
-        } else {
-            tracing::warn!(
-                "Limited priority <100 for model {}: too slow recent requests time (current: {:?}, allowed max: {:?}). Request ID: {}",
-                model,
-                mean,
-                state.max_mean_duration_s_low_priority,
-                request_id
-            );
-        }
-    }
+    
 
     // todo - determine the proper error code for when a request model is not present
     tracing::trace!("Getting chat completions engine for model: {}", model);
@@ -361,8 +320,12 @@ async fn chat_completions(
         .map_err(|_| ErrorResponse::model_not_found())?;
 
     // this will increment the inflight gauge for the model
-    let mut inflight = state.create_inflight_guard(model, Endpoint::ChatCompletions, streaming);
+    let mut inflight: InflightGuard = state.create_inflight_guard(model, Endpoint::ChatCompletions, streaming);
 
+    if state.is_rate_limited(model, priority) {
+        inflight.mark_429();
+        return Ok(ErrorResponse::too_many_requests(model).into_response());
+    }
     // setup context
     // todo - inherit request_id from distributed trace details
     let request_ctx = Context::with_id(request_payload, request_id.clone());

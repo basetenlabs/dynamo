@@ -14,7 +14,6 @@ reponses = [
 
 async def generate(request, context, *args): # generate(request, name: str, is_stopped: callable[bool])
     print("context", context)
-    print("*args should be empty", args)
     print("id", context.id())
     for response in reponses:
         if context.is_stopped():
