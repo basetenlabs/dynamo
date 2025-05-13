@@ -209,13 +209,7 @@ impl Metrics {
         {
             // Prune to last 60 seconds
             let now = Instant::now();
-            while let Some((start_time, _)) = times.front() {
-                if now.duration_since(*start_time) > Duration::from_secs(60) {
-                    times.pop_front();
-                } else {
-                    break;
-                }
-            }
+            times.retain(|(start_time, _)| now.duration_since(*start_time) <= Duration::from_secs(60));
             // Check again after pruning
             if times.is_empty() {
                 return (None, None);
