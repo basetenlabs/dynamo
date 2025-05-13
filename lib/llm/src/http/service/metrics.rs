@@ -21,6 +21,7 @@ use axum::{
     Router,
 };
 use prometheus::{Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, Opts};
+use serde_json::json;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},
@@ -558,19 +559,27 @@ async fn handler_health_model(
         (0, None, None) => {
             return (
                 StatusCode::BAD_REQUEST,
-                format!(
-                    "{{\"model_name\": \"{}\", \"data\": {{\"inflight\": {}, \"end2end_mean_time_secs\": null, \"end2end_median_time_secs\": null}}}}",
-                    model_name, inflight
-                ),
+                serde_json::to_string(&json!({
+                    "model_name": model_name,
+                    "data": {
+                        "inflight": inflight,
+                        "mean_ttfb": null,
+                        "median_ttfb": null,
+                    }
+                }))
+                .unwrap(),
             )
                 .into_response();
         }
-        (_, Some(mean), Some(median)) => {
-            format!(
-                "{{\"model_name\": \"{}\", \"data\": {{\"inflight\": {}, \"end2end_mean_time_secs\": {}, \"end2end_median_time_secs\": {} }}}}",
-                model_name, inflight, mean.as_secs_f64(), median.as_secs_f64()
-            )
-        }
+        (_, Some(mean), Some(median)) => serde_json::to_string(&json!({
+            "model_name": model_name,
+            "data": {
+                "inflight": inflight,
+                "mean_ttfb": mean.as_secs_f64(),
+                "median_ttfb": median.as_secs_f64()
+            }
+        }))
+        .unwrap(),
         _ => {
             return (
                 StatusCode::OK,
