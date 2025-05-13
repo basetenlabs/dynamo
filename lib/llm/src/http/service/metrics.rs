@@ -198,21 +198,23 @@ impl Metrics {
 
         let now = Instant::now();
         model_completions.push_back((now, duration));
-
-        // prune to last 60 seconds
-        while let Some((start_time, _)) = model_completions.front() {
-            if now.duration_since(*start_time) > Duration::from_secs(60) {
-                model_completions.pop_front();
-            } else {
-                break;
-            }
-        }
     }
 
     /// get recent ttfb times for the given model
     pub fn get_recent_ttfb_times(&self, model: &str) -> (Option<Duration>, Option<Duration>) {
-        let mut recent_times = self.rolling_ttfb.lock().unwrap();
-        if let Some(times) = recent_times.get_mut(model) {
+        let mut per_model_ttfb = self.rolling_ttfb.lock().unwrap();
+
+        if let Some(times) = per_model_ttfb.get_mut(model) {
+            // prune to last 60 seconds
+            let now = Instant::now();
+            while let Some((start_time, _)) = times.front() {
+                if now.duration_since(*start_time) > Duration::from_secs(60) {
+                    times.pop_front();
+                } else {
+                    break;
+                }
+            }
+
             let mean_time = times.iter().map(|(_, t)| *t).sum::<Duration>() / times.len() as u32;
             let median_time = if times.len() % 2 == 0 {
                 let mid = times.len() / 2;
