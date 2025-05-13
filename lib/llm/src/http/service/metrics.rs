@@ -13,7 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Router};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    Router,
+};
 use prometheus::{Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, Opts};
 use std::{
     collections::{HashMap, VecDeque},
@@ -28,6 +34,10 @@ use super::{DeploymentState, RouteDoc};
 /// Value for the `status` label in the request counter for successful requests
 pub const REQUEST_STATUS_SUCCESS: &str = "success";
 
+pub const REQUEST_STATUS_CLIENT_DROP: &str = "client_drop";
+
+pub const REQUEST_STATUS_429: &str = "429";
+
 /// Value for the `status` label in the request counter if the request failed
 pub const REQUEST_STATUS_ERROR: &str = "error";
 
@@ -41,7 +51,11 @@ pub struct Metrics {
     request_counter: IntCounterVec,
     inflight_gauge: IntGaugeVec,
     request_duration: HistogramVec,
-    recent_completions_per_model: Mutex<HashMap<String, VecDeque<(Instant, Duration)>>>,
+    ttfb: HistogramVec,
+    ibl_p50: HistogramVec,
+    ibl_p90: HistogramVec,
+    ibl_p99: HistogramVec,
+    rolling_ttfb: Mutex<HashMap<String, VecDeque<(Instant, Duration)>>>,
 }
 
 /// RAII object for inflight gauge and request counters
@@ -55,6 +69,7 @@ pub struct InflightGuard {
     request_type: RequestType,
     status: Status,
     timer: Instant,
+    events_times: Vec<Duration>,
 }
 
 /// Requests will be logged by the type of endpoint hit
@@ -79,6 +94,8 @@ pub enum RequestType {
 /// Status
 pub enum Status {
     Success,
+    ClientDrop,
+    TooManyRequests,
     Error,
 }
 
@@ -125,73 +142,87 @@ impl Metrics {
         )
         .unwrap();
 
+        let buckets_ttfb = vec![
+            0.0, 0.025, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0,
+            3.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0,
+        ];
+        let ttfb = HistogramVec::new(
+            HistogramOpts::new(
+                format!("{}_http_service_ttfb_seconds", prefix),
+                "Time to first byte for LLM requests",
+            )
+            .buckets(buckets_ttfb.clone()),
+            &["model"],
+        )
+        .unwrap();
+
+        let mut ibl = Vec::new();
+        for p in [0.5, 0.9, 0.99] {
+            let ibl_p = HistogramVec::new(
+                HistogramOpts::new(
+                    format!(
+                        "{}_http_service_ibl_p{}_seconds",
+                        prefix,
+                        p.to_string().replace('.', "_")
+                    ),
+                    format!(
+                        "Time to inter byte latency for LLM requests at {} percentile",
+                        p
+                    ),
+                )
+                .buckets(buckets_ttfb.clone()),
+                &["model"],
+            )
+            .unwrap();
+            ibl.push(ibl_p);
+        }
+
         Metrics {
             request_counter,
             inflight_gauge,
             request_duration,
-            recent_completions_per_model: Mutex::new(HashMap::new()),
+            ttfb,
+            ibl_p50: ibl[0].clone(),
+            ibl_p90: ibl[1].clone(),
+            ibl_p99: ibl[2].clone(),
+            rolling_ttfb: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Records a completed request's duration for a specific model.
-    /// Keeps only records from the last 60 seconds.
-    pub fn record_completion(&self, model: &str, duration: Duration) {
-        let mut per_model_completions = self.recent_completions_per_model.lock().unwrap();
-        let model_completions = per_model_completions
+    fn record_ttfb(&self, model: &str, duration: Duration) {
+        let mut per_model_ttfb = self.rolling_ttfb.lock().unwrap();
+        let model_completions = per_model_ttfb
             .entry(model.to_string())
             .or_insert_with(VecDeque::new);
 
         let now = Instant::now();
         model_completions.push_back((now, duration));
+
+        // prune to last 60 seconds
+        while let Some((start_time, _)) = model_completions.front() {
+            if now.duration_since(*start_time) > Duration::from_secs(60) {
+                model_completions.pop_front();
+            } else {
+                break;
+            }
+        }
     }
 
-    /// Checks if a model should be rate-limited based on recent performance.
-    /// Conditions: >10 requests in the last 60s AND average duration > 34s.
-    pub fn get_recent_e2e_times(&self, model: &str) -> (Option<Duration>, Option<Duration>) {
-        let mut per_model_completions_guard = self.recent_completions_per_model.lock().unwrap();
-
-        if let Some(model_completions) = per_model_completions_guard.get_mut(model) {
-            // Prune entries older than 60 seconds
-            let now = Instant::now();
-            let sixty_seconds_ago = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
-            while let Some((timestamp, _)) = model_completions.front() {
-                if *timestamp < sixty_seconds_ago {
-                    model_completions.pop_front();
-                } else {
-                    break;
-                }
-            }
-            if model_completions.is_empty() {
-                return (None, None);
-            }
-
-            let relevant_durations: Vec<Duration> = model_completions
-                .iter()
-                .map(|(_, duration)| *duration)
-                .collect();
-            drop(per_model_completions_guard);
-
-            
-            let total_duration_sum: Duration = relevant_durations.iter().sum();
-            let median_duration = {
-                let mut durations = relevant_durations.clone();
-                durations.sort();
-                let mid = durations.len() / 2;
-                if durations.len() % 2 == 0 {
-                    (durations[mid - 1] + durations[mid]) / 2 // panic here, if len is 0
-                } else {
-                    durations[mid]
-                }
+    /// get recent ttfb times for the given model
+    pub fn get_recent_ttfb_times(&self, model: &str) -> (Option<Duration>, Option<Duration>) {
+        let mut recent_times = self.rolling_ttfb.lock().unwrap();
+        if let Some(times) = recent_times.get_mut(model) {
+            let mean_time = times.iter().map(|(_, t)| *t).sum::<Duration>() / times.len() as u32;
+            let median_time = if times.len() % 2 == 0 {
+                let mid = times.len() / 2;
+                (times[mid - 1].1 + times[mid].1) / 2
+            } else {
+                times[times.len() / 2].1
             };
-            
-            let average_duration = total_duration_sum / (relevant_durations.len() as u32);
-
-            return (
-                Some(average_duration),
-                Some(median_duration),
-            );
+            (Some(mean_time), Some(median_time))
+        } else {
+            (None, None)
         }
-        return (None, None);
     }
 
     /// Get the number of successful requests for the given dimensions:
@@ -255,6 +286,10 @@ impl Metrics {
         registry.register(Box::new(self.request_counter.clone()))?;
         registry.register(Box::new(self.inflight_gauge.clone()))?;
         registry.register(Box::new(self.request_duration.clone()))?;
+        registry.register(Box::new(self.ttfb.clone()))?;
+        registry.register(Box::new(self.ibl_p50.clone()))?;
+        registry.register(Box::new(self.ibl_p90.clone()))?;
+        registry.register(Box::new(self.ibl_p99.clone()))?;
         Ok(())
     }
 }
@@ -307,7 +342,30 @@ impl InflightGuard {
             request_type,
             status: Status::Error,
             timer,
+            events_times: Vec::new(), // vec of event times
         }
+    }
+
+    pub(crate) fn add_event_time(&mut self) {
+        let duration = Instant::now().duration_since(self.timer);
+        if self.events_times.len() == 0 {
+            // this is the first event, so we can record the TTFB
+            self.metrics
+                .ttfb
+                .with_label_values(&[&self.model])
+                .observe(duration.as_secs_f64());
+            self.metrics.record_ttfb(&self.model, duration);
+        }
+
+        self.events_times.push(duration);
+    }
+
+    pub(crate) fn mark_429(&mut self) {
+        self.status = Status::TooManyRequests;
+    }
+
+    pub(crate) fn mark_client_drop(&mut self) {
+        self.status = Status::ClientDrop;
     }
 
     pub(crate) fn mark_ok(&mut self) {
@@ -331,13 +389,64 @@ impl Drop for InflightGuard {
         );
 
         let duration = self.timer.elapsed();
-        self.metrics.record_completion(&self.model, duration);
 
         // Record the duration of the request
         self.metrics
             .request_duration
             .with_label_values(&[&self.model])
             .observe(duration.as_secs_f64());
+
+        // Record the inter byte latency for each event, not counting the first event
+        // aggreate statistics across all events of this inflight request
+        if self.events_times.len() > 1 {
+            // ibl values are already Duration between events, so below code is commented out
+            let mut ibl_values_f64: Vec<f64> = Vec::with_capacity(self.events_times.len() - 1);
+            for i in 1..self.events_times.len() {
+                // Calculate IBL as the difference between consecutive event durations
+                // (assuming events_duration stores cumulative durations from request start)
+                let ibl_duration = self.events_times[i].saturating_sub(self.events_times[i - 1]);
+                ibl_values_f64.push(ibl_duration.as_secs_f64());
+            }
+
+            if !ibl_values_f64.is_empty() {
+                ibl_values_f64
+                    .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+                // Helper to calculate percentile from sorted f64 slice.
+                // Uses (L * P).ceil() - 1 rule for 0-indexed array of length L.
+                let calculate_percentile = |sorted_data: &[f64], p_fraction: f64| -> Option<f64> {
+                    if sorted_data.is_empty() {
+                        return None;
+                    }
+                    let len = sorted_data.len();
+                    // Calculate rank: (length * percentile_fraction), rounded up.
+                    // Convert to 0-based index: rank - 1.
+                    // Ensure index is within bounds [0, len-1].
+                    let rank_ceil = (len as f64 * p_fraction).ceil();
+                    let index = (rank_ceil as usize).saturating_sub(1).min(len - 1);
+                    Some(sorted_data[index])
+                };
+
+                if let Some(p50) = calculate_percentile(&ibl_values_f64, 0.50) {
+                    self.metrics
+                        .ibl_p50
+                        .with_label_values(&[&self.model])
+                        .observe(p50);
+                }
+                if let Some(p90) = calculate_percentile(&ibl_values_f64, 0.90) {
+                    self.metrics
+                        .ibl_p90
+                        .with_label_values(&[&self.model])
+                        .observe(p90);
+                }
+                if let Some(p99) = calculate_percentile(&ibl_values_f64, 0.99) {
+                    self.metrics
+                        .ibl_p99
+                        .with_label_values(&[&self.model])
+                        .observe(p99);
+                }
+            }
+        }
     }
 }
 
@@ -372,24 +481,41 @@ impl Status {
     pub fn as_str(&self) -> &'static str {
         match self {
             Status::Success => REQUEST_STATUS_SUCCESS,
+            Status::ClientDrop => REQUEST_STATUS_CLIENT_DROP,
+            Status::TooManyRequests => REQUEST_STATUS_429,
             Status::Error => REQUEST_STATUS_ERROR,
         }
     }
 }
 
-/// Create a new router with the given path
-pub fn router(registry: Registry, path: Option<String>) -> (Vec<RouteDoc>, Router) {
-    let registry = Arc::new(registry);
-    let path = path.unwrap_or_else(|| "/metrics".to_string());
-    let doc = RouteDoc::new(axum::http::Method::GET, &path);
-    let route = Router::new()
-        .route(&path, get(handler_metrics))
-        .with_state(registry);
-    (vec![doc], route)
+/// Create a new router with the given path for handler_metrics and handler_health_model
+pub fn router(
+    registry: Registry,
+    metrics: Arc<Metrics>,
+    path: Option<String>,
+) -> (Vec<RouteDoc>, Router) {
+    let registry_arc = Arc::new(registry);
+    let app_state = (registry_arc, metrics.clone());
+
+    let metrics_path = path.unwrap_or_else(|| "/metrics".to_string());
+    let health_model_path_str = "/health_model/{model_name}";
+
+    let doc_metrics = RouteDoc::new(axum::http::Method::GET, &metrics_path);
+    let doc_health_model = RouteDoc::new(axum::http::Method::GET, health_model_path_str);
+
+    let service_router = Router::new() // without v07 checks
+        .route(&metrics_path, get(handler_metrics))
+        .route(health_model_path_str, get(handler_health_model))
+        .with_state(app_state);
+
+    let docs = vec![doc_metrics, doc_health_model];
+    (docs, service_router)
 }
 
 /// Metrics Handler
-async fn handler_metrics(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
+async fn handler_metrics(
+    State((registry, _)): State<(Arc<Registry>, Arc<Metrics>)>,
+) -> impl IntoResponse {
     let encoder = prometheus::TextEncoder::new();
     let metric_families = registry.gather();
     let mut buffer = vec![];
@@ -413,4 +539,48 @@ async fn handler_metrics(State(registry): State<Arc<Registry>>) -> impl IntoResp
     };
 
     (StatusCode::OK, metrics).into_response()
+}
+
+// handle health_model
+// this route allows a get request to /health_model/{model_name}
+// and returns 200 OK with the count of inflight + past 60s request end2end times as json payload
+// 200: {"model_name": { "inflight": 15, "end2end_mean_time": 7.5 } }
+// 400: {"model_name": { "inflight": 0, "end2end_mean_time": 0 } }
+
+async fn handler_health_model(
+    State((_, current_metrics)): State<(Arc<Registry>, Arc<Metrics>)>,
+    Path(model_name): Path<String>,
+) -> impl IntoResponse {
+    let inflight = current_metrics.get_inflight_count(&model_name);
+    let (mean_time, median_time) = current_metrics.get_recent_ttfb_times(&model_name);
+
+    let response_body = match (inflight, mean_time, median_time) {
+        (0, None, None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "{{\"model_name\": \"{}\", \"data\": {{\"inflight\": {}, \"end2end_mean_time_secs\": null, \"end2end_median_time_secs\": null}}}}",
+                    model_name, inflight
+                ),
+            )
+                .into_response();
+        }
+        (_, Some(mean), Some(median)) => {
+            format!(
+                "{{\"model_name\": \"{}\", \"data\": {{\"inflight\": {}, \"end2end_mean_time_secs\": {}, \"end2end_median_time_secs\": {} }}}}",
+                model_name, inflight, mean.as_secs_f64(), median.as_secs_f64()
+            )
+        }
+        _ => {
+            return (
+                StatusCode::OK,
+                format!(
+                    "{{\"model_name\": \"{}\", \"data\": {{\"inflight\": {}, \"end2end_mean_time_secs\": null, \"end2end_median_time_secs\": null}}}}",
+                    model_name, inflight
+                ),
+            )
+                .into_response();
+        }
+    };
+    (StatusCode::OK, response_body).into_response()
 }

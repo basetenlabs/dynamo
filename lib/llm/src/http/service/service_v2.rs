@@ -92,9 +92,10 @@ impl HttpServiceConfigBuilder {
 
         let mut router = axum::Router::new();
         let mut all_docs = Vec::new();
+        let metrics_arc = model_manager.state().metrics.clone();
 
         let mut routes = vec![
-            metrics::router(registry, None),
+            metrics::router(registry, metrics_arc, None),
             super::openai::list_models_router(model_manager.state(), None),
         ];
 

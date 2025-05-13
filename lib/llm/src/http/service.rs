@@ -193,7 +193,7 @@ pub struct DeploymentState {
     chat_completion_engines: Arc<Mutex<ModelEngines<OpenAIChatCompletionsStreamingEngine>>>,
     metrics: Arc<Metrics>,
     sse_keep_alive: Option<Duration>,
-    pub max_mean_duration_s_low_priority: Duration, 
+    pub max_mean_duration_s_low_priority: Duration,
 }
 
 impl DeploymentState {

@@ -42,7 +42,7 @@ use super::{
 };
 
 use crate::protocols::openai::{
-    chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse, nvext::NvExt
+    chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse, nvext::NvExt,
 };
 use crate::types::{
     openai::{chat_completions::NvCreateChatCompletionRequest, completions::CompletionRequest},
@@ -100,8 +100,7 @@ impl ErrorResponse {
             Json(ErrorResponse {
                 error: format!(
                     "Too many inflight requests (={}) for model: {}. Please try again later.",
-                    number,
-                    model_name
+                    number, model_name
                 ),
             }),
         )
@@ -158,7 +157,7 @@ fn extract_request_id(headers: &HeaderMap) -> (String, i32) {
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.parse::<i32>().ok())
         .unwrap_or(100);
-    
+
     let request_id = format!(
         "{}--{}--{}",
         billing_id, request_suffix, billing_model_version
@@ -196,19 +195,22 @@ async fn completions(
         stream: Some(true),
         ..request.inner
     };
-    
+
     let mut request_payload = CompletionRequest {
         inner,
         nvext: request.nvext,
     };
-    request_payload.nvext.get_or_insert_with(NvExt::default).priority = Some(priority as i64);
+    request_payload
+        .nvext
+        .get_or_insert_with(NvExt::default)
+        .priority = Some(priority as i64);
 
     // todo - make the protocols be optional for model name
     // todo - when optional, if none, apply a default
     let model = &request_payload.inner.model;
 
     // Check for backpressure before proceeding
-    let (mean, _) = state.metrics.get_recent_e2e_times(model);
+    let (mean, _) = state.metrics.get_recent_ttfb_times(model);
     // rate limit based on mean e2e time, before attaching RAII guard
     if mean >= Some(state.max_mean_duration_s_low_priority) {
         if priority > 100 {
@@ -318,14 +320,17 @@ async fn chat_completions(
         inner: inner_request,
         nvext: request.nvext,
     };
-    request_payload.nvext.get_or_insert_with(NvExt::default).priority = Some(priority as i64);
+    request_payload
+        .nvext
+        .get_or_insert_with(NvExt::default)
+        .priority = Some(priority as i64);
 
     // todo - make the protocols be optional for model name
     // todo - when optional, if none, apply a default
     let model = &request_payload.inner.model;
 
     // Check for backpressure before proceeding
-    let (mean, _) = state.metrics.get_recent_e2e_times(model);
+    let (mean, _) = state.metrics.get_recent_ttfb_times(model);
     if mean >= Some(state.max_mean_duration_s_low_priority) {
         if priority > 100 {
             tracing::warn!(
@@ -535,9 +540,13 @@ async fn monitor_for_disconnects(
                 Err(err) => Ok(Event::default().event("error").comment(err.to_string())),
             };
 
+            // send event duration to inflight
+            inflight.add_event_time();
+
             if (tx.send(event).await).is_err() {
                 tracing::trace!("Forwarding SSE stream was dropped; breaking loop");
                 context.stop_generating();
+                inflight.mark_client_drop();
                 break;
             }
         }
