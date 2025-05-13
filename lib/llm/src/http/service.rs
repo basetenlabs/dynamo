@@ -212,14 +212,8 @@ impl DeploymentState {
         }
     }
 
-    fn is_rate_limited(
-        &self,
-        model: &str,
-        priority: i32,
-    ) -> bool {
-        let (_, median_ttfb) = self
-            .metrics
-            .get_recent_ttfb_times(model);
+    fn is_rate_limited(&self, model: &str, priority: i32) -> bool {
+        let (_, median_ttfb) = self.metrics.get_recent_ttfb_times(model);
 
         if let Some(median_ttfb) = median_ttfb {
             if median_ttfb >= self.ttfb_low_priority_max {
@@ -230,7 +224,7 @@ impl DeploymentState {
                         median_ttfb,
                         self.ttfb_low_priority_max
                     );
-                    return true
+                    return true;
                 } else {
                     tracing::warn!(
                         "Limited priority to < 100 for model {}: too slow recent requests time (current: {:?}, allowed max: {:?}).",

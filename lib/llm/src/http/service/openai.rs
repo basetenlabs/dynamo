@@ -310,8 +310,6 @@ async fn chat_completions(
     // todo - when optional, if none, apply a default
     let model = &request_payload.inner.model;
 
-    
-
     // todo - determine the proper error code for when a request model is not present
     tracing::trace!("Getting chat completions engine for model: {}", model);
 
@@ -320,7 +318,8 @@ async fn chat_completions(
         .map_err(|_| ErrorResponse::model_not_found())?;
 
     // this will increment the inflight gauge for the model
-    let mut inflight: InflightGuard = state.create_inflight_guard(model, Endpoint::ChatCompletions, streaming);
+    let mut inflight: InflightGuard =
+        state.create_inflight_guard(model, Endpoint::ChatCompletions, streaming);
 
     if state.is_rate_limited(model, priority) {
         inflight.mark_429();

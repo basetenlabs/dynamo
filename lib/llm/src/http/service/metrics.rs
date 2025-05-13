@@ -202,30 +202,32 @@ impl Metrics {
 
     /// get recent ttfb times for the given model
     pub fn get_recent_ttfb_times(&self, model: &str) -> (Option<Duration>, Option<Duration>) {
-        let mut per_model_ttfb = self.rolling_ttfb.lock().unwrap(); // paniced here, find out why!
-
-        let times = per_model_ttfb.get_mut(model);
-        if let Some(times) = times {
-            if !times.is_empty() {
-                // prune to last 60 seconds
-                let now = Instant::now();
-                while let Some((start_time, _)) = times.front() {
-                    if now.duration_since(*start_time) > Duration::from_secs(60) {
-                        times.pop_front();
-                    } else {
-                        break;
-                    }
-                }
-
-                let mean_time = times.iter().map(|(_, t)| *t).sum::<Duration>() / times.len() as u32;
-                let median_time = if times.len() % 2 == 0 {
-                    let mid = times.len() / 2;
-                    (times[mid - 1].1 + times[mid].1) / 2
+        let mut per_model_ttfb = self.rolling_ttfb.lock().unwrap();
+        if let Some(times) = per_model_ttfb
+            .get_mut(model)
+            .filter(|times| !times.is_empty())
+        {
+            // Prune to last 60 seconds
+            let now = Instant::now();
+            while let Some((start_time, _)) = times.front() {
+                if now.duration_since(*start_time) > Duration::from_secs(60) {
+                    times.pop_front();
                 } else {
-                    times[times.len() / 2].1
-                };
-                return (Some(mean_time), Some(median_time))
+                    break;
+                }
             }
+            // Check again after pruning
+            if times.is_empty() {
+                return (None, None);
+            }
+            let mean_time = times.iter().map(|(_, t)| *t).sum::<Duration>() / times.len() as u32;
+            let median_time = if times.len() % 2 == 0 {
+                let mid = times.len() / 2;
+                (times[mid - 1].1 + times[mid].1) / 2
+            } else {
+                times[times.len() / 2].1
+            };
+            return (Some(mean_time), Some(median_time));
         }
         (None, None)
     }
@@ -568,9 +570,10 @@ async fn handler_health_model(
                     "mean_ttfb": mean_ttfb.as_secs_f64(),
                     "median_ttfb": median_ttfb.as_secs_f64()
                 }
-            })).unwrap();
+            }))
+            .unwrap();
             (StatusCode::OK, body)
-        },
+        }
         _ => {
             let body = serde_json::to_string(&json!({
                 "model_name": model_name,
@@ -579,10 +582,11 @@ async fn handler_health_model(
                     "mean_ttfb": mean_ttfb.unwrap_or_default().as_secs_f64(),
                     "median_ttfb": median_ttfb.unwrap_or_default().as_secs_f64()
                 }
-            })).unwrap();
+            }))
+            .unwrap();
             (StatusCode::SERVICE_UNAVAILABLE, body)
         }
     };
-    
+
     (status, response_body).into_response()
 }
