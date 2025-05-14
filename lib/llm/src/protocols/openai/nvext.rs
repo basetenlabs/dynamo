@@ -61,6 +61,14 @@ pub struct NvExt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[builder(default, setter(strip_option))]
     pub annotations: Option<Vec<String>>,
+
+    /// priority
+    /// The priority of the request. This is used to determine the order in which requests are processed.
+    /// Lower numbers represent higher priorities
+    /// The default value is 1000
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    pub priority: Option<i64>,
 }
 
 impl Default for NvExt {

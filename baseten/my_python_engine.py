@@ -13,9 +13,7 @@ reponses = [
 ]
 
 async def generate(request, context, *args): # generate(request, name: str, is_stopped: callable[bool])
-    print("context", context)
-    print("*args should be empty", args)
-    print("id", context.id())
+    print("processing id", context.id())
     for response in reponses:
         if context.is_stopped():
             print("request got canceled, canceling child context")
@@ -24,3 +22,4 @@ async def generate(request, context, *args): # generate(request, name: str, is_s
             break
         yield response
         await asyncio.sleep(0.1)
+    print("finished processing id", context.id())

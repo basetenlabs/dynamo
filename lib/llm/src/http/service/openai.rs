@@ -42,7 +42,7 @@ use super::{
 };
 
 use crate::protocols::openai::{
-    chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse,
+    chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse, nvext::NvExt,
 };
 use crate::types::{
     openai::{chat_completions::NvCreateChatCompletionRequest, completions::CompletionRequest},
@@ -92,6 +92,20 @@ impl ErrorResponse {
         )
     }
 
+    /// Too Many Requests Error
+    /// This is returned when the service is busy due to too many inflight requests for a model.
+    pub fn too_many_requests(model_name: &str) -> (StatusCode, Json<ErrorResponse>) {
+        (
+            StatusCode::TOO_MANY_REQUESTS, // 429 Too Many Requests
+            Json(ErrorResponse {
+                error: format!(
+                    "Too slow inflight requests for model: {}. Please try again later.",
+                    model_name
+                ),
+            }),
+        )
+    }
+
     /// The OAI endpoints call an [`dynamo.runtime::engine::AsyncEngine`] which are specialized to return
     /// an [`anyhow::Error`]. This method will convert the [`anyhow::Error`] into an [`HttpError`].
     /// If successful, it will return the [`HttpError`] as an [`ErrorResponse::internal_server_error`]
@@ -121,7 +135,7 @@ impl From<HttpError> for ErrorResponse {
     }
 }
 
-fn extract_request_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+fn extract_request_id(headers: &HeaderMap) -> (String, i32) {
     let billing_id = headers
         .get("X-Baseten-Billing-Org-Id")
         .and_then(|h| h.to_str().ok())
@@ -138,10 +152,18 @@ fn extract_request_id(headers: &HeaderMap) -> Result<String, (StatusCode, Json<E
         .and_then(|h| h.to_str().ok())
         .unwrap_or("modelversionidempty");
 
-    Ok(format!(
+    let priority: i32 = headers
+        .get("X-Baseten-Priority")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(100);
+
+    let request_id = format!(
         "{}--{}--{}",
         billing_id, request_suffix, billing_model_version
-    ))
+    );
+
+    (request_id, priority)
 }
 
 /// OpenAI Completions Request Handler
@@ -162,10 +184,7 @@ async fn completions(
     check_ready(&state)?;
 
     // todo - extract distributed tracing id and context id from headers
-    let request_id = match extract_request_id(&headers) {
-        Ok(request_id) => request_id,
-        Err(err) => return Err(err),
-    };
+    let (request_id, priority) = extract_request_id(&headers);
 
     tracing::info!("request_id: {request_id}");
     // todo - decide on default
@@ -177,14 +196,18 @@ async fn completions(
         ..request.inner
     };
 
-    let request = CompletionRequest {
+    let mut request_payload = CompletionRequest {
         inner,
         nvext: request.nvext,
     };
+    request_payload
+        .nvext
+        .get_or_insert_with(NvExt::default)
+        .priority = Some(priority as i64);
 
     // todo - make the protocols be optional for model name
     // todo - when optional, if none, apply a default
-    let model = &request.inner.model;
+    let model = &request_payload.inner.model;
 
     // todo - error handling should be more robust
     let engine = state
@@ -194,13 +217,19 @@ async fn completions(
     // this will increment the inflight gauge for the model
     let mut inflight = state.create_inflight_guard(model, Endpoint::Completions, streaming);
 
+    // Check for backpressure before proceeding
+    if state.is_rate_limited(model, priority) {
+        inflight.mark_429();
+        return Ok(ErrorResponse::too_many_requests(model).into_response());
+    }
+
     // setup context
     // todo - inherit request_id from distributed trace details
-    let request = Context::with_id(request, request_id.clone());
+    let request_ctx = Context::with_id(request_payload, request_id.clone());
 
     // issue the generate call on the engine
     let stream = engine
-        .generate(request)
+        .generate(request_ctx)
         .await
         .map_err(|e| ErrorResponse::from_anyhow(e, "Failed to generate completions"))?;
 
@@ -256,10 +285,7 @@ async fn chat_completions(
     check_ready(&state)?;
 
     // todo - extract distributed tracing id and context id from headers
-    let request_id = match extract_request_id(&headers) {
-        Ok(request_id) => request_id,
-        Err(err) => return Err(err),
-    };
+    let (request_id, priority) = extract_request_id(&headers);
     tracing::info!("request_id: {request_id}");
 
     // todo - decide on default
@@ -271,14 +297,18 @@ async fn chat_completions(
         ..request.inner
     };
 
-    let request = NvCreateChatCompletionRequest {
+    let mut request_payload = NvCreateChatCompletionRequest {
         inner: inner_request,
         nvext: request.nvext,
     };
+    request_payload
+        .nvext
+        .get_or_insert_with(NvExt::default)
+        .priority = Some(priority as i64);
 
     // todo - make the protocols be optional for model name
     // todo - when optional, if none, apply a default
-    let model = &request.inner.model;
+    let model = &request_payload.inner.model;
 
     // todo - determine the proper error code for when a request model is not present
     tracing::trace!("Getting chat completions engine for model: {}", model);
@@ -288,17 +318,22 @@ async fn chat_completions(
         .map_err(|_| ErrorResponse::model_not_found())?;
 
     // this will increment the inflight gauge for the model
-    let mut inflight = state.create_inflight_guard(model, Endpoint::ChatCompletions, streaming);
+    let mut inflight: InflightGuard =
+        state.create_inflight_guard(model, Endpoint::ChatCompletions, streaming);
 
+    if state.is_rate_limited(model, priority) {
+        inflight.mark_429();
+        return Ok(ErrorResponse::too_many_requests(model).into_response());
+    }
     // setup context
     // todo - inherit request_id from distributed trace details
-    let request = Context::with_id(request, request_id.clone());
+    let request_ctx = Context::with_id(request_payload, request_id.clone());
 
     tracing::trace!("Issuing generate call for chat completions");
 
     // issue the generate call on the engine
     let stream = engine
-        .generate(request)
+        .generate(request_ctx)
         .await
         .map_err(|e| ErrorResponse::from_anyhow(e, "Failed to generate completions"))?;
 
@@ -324,8 +359,8 @@ async fn chat_completions(
             .await
             .map_err(|e| {
                 tracing::error!(
+                    "Failed to fold chat completions stream for request_id {}: {:?}",
                     request_id,
-                    "Failed to fold chat completions stream for: {:?}",
                     e
                 );
                 ErrorResponse::internal_server_error(&format!(
@@ -467,9 +502,13 @@ async fn monitor_for_disconnects(
                 Err(err) => Ok(Event::default().event("error").comment(err.to_string())),
             };
 
+            // send event duration to inflight
+            inflight.add_event_time();
+
             if (tx.send(event).await).is_err() {
                 tracing::trace!("Forwarding SSE stream was dropped; breaking loop");
                 context.stop_generating();
+                inflight.mark_client_drop();
                 break;
             }
         }

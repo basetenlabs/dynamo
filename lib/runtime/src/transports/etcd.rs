@@ -296,9 +296,7 @@ impl Client {
                     return;
                 }
             }
-        
             let mut ticker = interval(Duration::from_secs(15));
-        
             loop {
                 tokio::select! {
                     maybe_resp = watch_stream.next() => {
