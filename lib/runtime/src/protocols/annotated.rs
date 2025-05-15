@@ -61,6 +61,16 @@ impl<R> Annotated<R> {
         }
     }
 
+    /// Create a new annotated stream from the given data and error
+    pub fn from_data_and_error(data: R, error: String    ) -> Self {
+        Self {
+            data: Some(data),
+            id: None,
+            event: Some("error".to_string()),
+            comment: Some(vec![error]),
+        }
+    }
+
     /// Add an annotation to the stream
     ///
     /// Annotations populate the `event` field and the `comment` field
