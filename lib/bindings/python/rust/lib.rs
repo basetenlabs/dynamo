@@ -424,7 +424,7 @@ impl Endpoint {
         generator: PyObject,
         lease: Option<&PyLease>,
     ) -> PyResult<Bound<'p, PyAny>> {
-        let engine = Arc::new(http::HttpAsyncEngine::new(
+        let engine = Arc::new(engine::PythonAsyncEngine::new(
             generator,
             self.event_loop.clone(),
         )?);
