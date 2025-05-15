@@ -284,7 +284,7 @@ enum ResponseProcessingError {
     OffloadError(String),
 }
 
-#[async_trait]
+#[async_trait] // <Req, Resp> AsyncEngine<SingleIn<Req>, ManyOut<Annotated<Resp>>, Error> is fixed crate wide.
 impl<Req, Resp> AsyncEngine<SingleIn<Req>, ManyOut<Annotated<Resp>>, Error>
     for PythonServerStreamingEngine
 where
@@ -393,6 +393,7 @@ where
                                     user_message: user_msg.clone(),
                                     details: msg.clone(),
                                 };
+                                // todo: figure out how to cast this match arm to Annotated<Resp>
                                 Annotated::from_error(serde_json::to_string(&error_response).unwrap())
                             }
 
