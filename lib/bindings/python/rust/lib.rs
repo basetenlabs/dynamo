@@ -30,6 +30,7 @@ use dynamo_runtime::{
     protocols::annotated::Annotated as RsAnnotated,
     traits::DistributedRuntimeProvider,
 };
+use dynamo_engine_python::HttpError;
 
 use dynamo_engine_python::PyContext;
 
@@ -78,7 +79,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::billing::PyBillingPublisher>()?;
     m.add_class::<llm::billing::PyBillingEvent>()?;
     m.add_class::<http::HttpService>()?;
-    m.add_class::<http::HttpError>()?;
+    m.add_class::<HttpError>()?;
     m.add_class::<http::HttpAsyncEngine>()?;
     m.add_class::<EtcdKvCache>()?;
 
@@ -423,7 +424,7 @@ impl Endpoint {
         generator: PyObject,
         lease: Option<&PyLease>,
     ) -> PyResult<Bound<'p, PyAny>> {
-        let engine = Arc::new(engine::PythonAsyncEngine::new(
+        let engine = Arc::new(http::HttpAsyncEngine::new(
             generator,
             self.event_loop.clone(),
         )?);

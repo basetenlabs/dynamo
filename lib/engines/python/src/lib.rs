@@ -29,6 +29,7 @@ pub use dynamo_runtime::{
     CancellationToken, Error, Result,
 };
 use pyo3::prelude::*;
+use pyo3::{exceptions::PyException};
 use pyo3::types::{IntoPyDict, PyDict};
 use pyo3_async_runtimes::TaskLocals;
 use pythonize::{depythonize, pythonize};
@@ -108,6 +109,31 @@ pub async fn make_token_engine(
     let engine = new_engine(cancel_token, py_file, py_args).await?;
     let engine: ExecutionContext = Arc::new(engine);
     Ok(engine)
+}
+
+/// Python Exception for HTTP errors
+#[pyclass(extends=PyException)]
+pub struct HttpError {
+    pub code: u16,
+    pub message: String,
+}
+
+#[pymethods]
+impl HttpError {
+    #[new]
+    pub fn new(code: u16, message: String) -> Self {
+        HttpError { code, message }
+    }
+
+    #[getter]
+    fn code(&self) -> u16 {
+        self.code
+    }
+
+    #[getter]
+    fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 #[pyclass]
@@ -259,6 +285,12 @@ enum ResponseProcessingError {
     #[error("python exception: {0}")]
     PythonException(String),
 
+    #[error("python http exception: {code}: {message}")]
+    HttpException {
+        code: u16,
+        message: String,
+    },
+
     #[error("deserialize error: {0}")]
     DeserializeError(String),
 
@@ -362,6 +394,10 @@ where
                                 let msg = format!("critical error: failed to offload the python async generator to a new thread: {}", e);
                                 msg
                             }
+                            ResponseProcessingError::HttpException { code, message } => {
+                                let msg = format!("python has raised an http error: {}: {}", code, message);
+                                msg
+                            }
                         };
 
                         Annotated::from_error(msg)
@@ -403,21 +439,43 @@ async fn process_item<Resp>(
 where
     Resp: Data + for<'de> Deserialize<'de>,
 {
-    let item = item.map_err(|e| {
-        println!();
-        Python::with_gil(|py| e.display(py));
-        ResponseProcessingError::PythonException(e.to_string())
-    })?;
+    // Check if the Python call resulted in an error.
+    let py_obj = match item {
+        Ok(obj) => obj,
+        Err(py_err) => {
+            return Python::with_gil(|py| {
+                // Try to extract an HttpError from the Python exception.
+                match py_err
+                    .clone_ref(py)
+                    .into_value(py)
+                    .extract::<PyRef<HttpError>>(py)
+                {
+                    Ok(http_error_instance) => {
+                        tracing::info!(
+                            "Raising HttpError {}: {}",
+                            http_error_instance.code,
+                            http_error_instance.message
+                        );
+                        Err(ResponseProcessingError::HttpException {
+                            code: http_error_instance.code,
+                            message: http_error_instance.message.clone(),
+                        })
+                    }
+                    Err(_) => Err(ResponseProcessingError::PythonException(py_err.to_string())),
+                }
+            });
+        }
+    };
+
+    // Offload the deserialization onto a blocking task.
     let response = tokio::task::spawn_blocking(move || {
-        Python::with_gil(|py| depythonize::<Resp>(&item.into_bound(py)))
+        Python::with_gil(|py| depythonize::<Resp>(&py_obj.into_bound(py)))
     })
     .await
     .map_err(|e| ResponseProcessingError::OffloadError(e.to_string()))?
     .map_err(|e| ResponseProcessingError::DeserializeError(e.to_string()))?;
 
-    let response = Annotated::from_data(response);
-
-    Ok(response)
+    Ok(Annotated::from_data(response))
 }
 
 /// On Mac embedded Python interpreters do not pick up the virtual env.

@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use pyo3::{exceptions::PyException, prelude::*};
+use pyo3::prelude::*;
 
 use crate::{engine::*, to_pyerr, CancellationToken};
 use tracing::info;
@@ -27,6 +27,7 @@ pub use dynamo_runtime::{
     protocols::annotated::Annotated,
     Error, Result,
 };
+use dynamo_engine_python::HttpError;
 
 #[pyclass]
 pub struct HttpService {
@@ -94,30 +95,7 @@ impl HttpService {
     }
 }
 
-/// Python Exception for HTTP errors
-#[pyclass(extends=PyException)]
-pub struct HttpError {
-    code: u16,
-    message: String,
-}
 
-#[pymethods]
-impl HttpError {
-    #[new]
-    pub fn new(code: u16, message: String) -> Self {
-        HttpError { code, message }
-    }
-
-    #[getter]
-    fn code(&self) -> u16 {
-        self.code
-    }
-
-    #[getter]
-    fn message(&self) -> &str {
-        &self.message
-    }
-}
 
 #[pyclass]
 #[derive(Clone)]
