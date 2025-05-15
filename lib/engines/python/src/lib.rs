@@ -110,6 +110,16 @@ pub async fn make_token_engine(
     Ok(engine)
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct CustomErrorResponse {
+    error_type: String,
+    code: i32,
+    user_facing: bool,
+    user_message: String,
+    details: String,
+}
+
+
 #[pyclass]
 pub struct PyContext {
     // This field isn’t exposed to Python and is constructed in Rust.
@@ -259,6 +269,14 @@ enum ResponseProcessingError {
     #[error("python exception: {0}")]
     PythonException(String),
 
+    #[error("custom exception: code={code}, message={msg}")]
+    CustomPythonException {
+        code: i32,
+        user_facing: bool,
+        user_msg: String,
+        msg: String,
+    },
+
     #[error("deserialize error: {0}")]
     DeserializeError(String),
 
@@ -352,19 +370,34 @@ where
                                 // todo: add task-local context to the python async generator
                                 ctx.stop_generating();
                                 let msg = format!("critical error: invalid response object from python async generator; application-logic-mismatch: {}", e);
-                                msg
+                                Annotated::from_error(msg)
                             }
                             ResponseProcessingError::PythonException(e) => {
                                 let msg = format!("a python exception was caught while processing the async generator: {}", e);
-                                msg
+                                Annotated::from_error(msg)
                             }
                             ResponseProcessingError::OffloadError(e) => {
                                 let msg = format!("critical error: failed to offload the python async generator to a new thread: {}", e);
-                                msg
+                                Annotated::from_error(msg)
                             }
-                        };
+                            ResponseProcessingError::CustomPythonException {
+                                code,
+                                user_facing,
+                                user_msg,
+                                msg,
+                            } => {
+                                let error_response = CustomErrorResponse {
+                                    error_type: "custom_python_exception".to_string(),
+                                    code: *code,
+                                    user_facing: *user_facing,
+                                    user_message: user_msg.clone(),
+                                    details: msg.clone(),
+                                };
+                                Annotated::from_error(serde_json::to_string(&error_response).unwrap())
+                            }
 
-                        Annotated::from_error(msg)
+                        };
+                        msg
                     }
                 };
 
@@ -404,10 +437,48 @@ where
     Resp: Data + for<'de> Deserialize<'de>,
 {
     let item = item.map_err(|e| {
+        // Try to extract custom exception fields
+        let custom_error = Python::with_gil(|py| {
+            // Get the exception value directly - it's not a Result
+            let exception_value = e.value(py);
+            
+            // Check if it has our custom exception attributes
+            if let (
+            Ok(code), Ok(user_facing), Ok(user_msg), Ok(msg)) = (
+                exception_value.getattr("code"),
+                exception_value.getattr("user_facing"),
+                exception_value.getattr("user_msg"),
+                exception_value.getattr("msg"),
+            ) {
+                // Try to extract the values
+                if let (Ok(code), Ok(user_facing), Ok(user_msg), Ok(msg)) = (
+                    code.extract::<i32>(),
+                    user_facing.extract::<bool>(),
+                    user_msg.extract::<String>(),
+                    msg.extract::<String>(),
+                ) {
+                    return Some(ResponseProcessingError::CustomPythonException {
+                        code,
+                        user_facing,
+                        user_msg,
+                        msg,
+                    });
+                }
+            }
+            None
+        });
+
+        // Return custom error if found, otherwise fallback to standard exception
+        if let Some(custom_error) = custom_error {
+            return custom_error;
+        }
+
         println!();
         Python::with_gil(|py| e.display(py));
         ResponseProcessingError::PythonException(e.to_string())
     })?;
+    
+    // Rest of the function remains the same
     let response = tokio::task::spawn_blocking(move || {
         Python::with_gil(|py| depythonize::<Resp>(&item.into_bound(py)))
     })
@@ -416,7 +487,6 @@ where
     .map_err(|e| ResponseProcessingError::DeserializeError(e.to_string()))?;
 
     let response = Annotated::from_data(response);
-
     Ok(response)
 }
 
