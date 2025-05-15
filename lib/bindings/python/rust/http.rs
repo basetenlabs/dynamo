@@ -18,7 +18,7 @@ use std::sync::Arc;
 use pyo3::{exceptions::PyException, prelude::*};
 
 use crate::{engine::*, to_pyerr, CancellationToken};
-
+use tracing::info;
 pub use dynamo_llm::http::service::{error as http_error, service_v2};
 
 pub use dynamo_runtime::{
@@ -169,6 +169,7 @@ where
                             .into_value(py)
                             .extract::<PyRef<HttpError>>(py)
                         {
+                            info!("Raising HttpError {}: {}", http_error_instance.code, http_error_instance.message);
                             Err(http_error::HttpError {
                                 code: http_error_instance.code,
                                 message: http_error_instance.message.clone(),

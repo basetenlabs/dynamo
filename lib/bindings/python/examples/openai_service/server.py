@@ -19,15 +19,19 @@ import uuid
 
 import uvloop
 
-from dynamo.llm import HttpAsyncEngine, HttpService
+from dynamo.llm import HttpAsyncEngine, HttpService, HttpError
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 
 
 class MockEngine:
     def __init__(self, model_name):
         self.model_name = model_name
+        self.counter = 0
 
-    def generate(self, request):
+    def generate(self, request, py_context):
+        self.counter += 1
+        if self.counter % 2 == 0:
+            raise HttpError(415 + self.counter, 'bad luck, your schema got rejected')
         id = f"chat-{uuid.uuid4()}"
         created = int(time.time())
         model = self.model_name
