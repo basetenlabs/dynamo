@@ -42,7 +42,7 @@ curl -X POST http://0.0.0.0:8080/v1/chat/completions \
 # Testing with dynamo run
 
 ```bash
-cargo build --release --features python
+cargo build --features python
 cd baseten
-/node-storage/cargo-target/release/dynamo-run out=pystr:my_python_engine.py in=http --model-name Llama-3.2-1B-Instruct
+/node-storage/cargo-target/debug/dynamo-run out=pystr:my_python_engine.py in=http --model-name Llama-3.2-1B-Instruct
 ```

@@ -260,9 +260,9 @@ enum ResponseProcessingError {
     #[error("python exception: {0}")]
     PythonException(String),
 
-    #[error("custom exception: code={code}, message={msg}")]
+    #[error("custom exception: http_code={http_code}, message={msg}")]
     PropagatedPythonException {
-        code: i32,
+        http_code: i32,
         user_facing: bool,
         user_msg: String,
         msg: String,
@@ -369,7 +369,7 @@ where
                                 Annotated::from_error(msg)
                             }
                             ResponseProcessingError::PropagatedPythonException {
-                                code,
+                                http_code,
                                 user_facing,
                                 user_msg,
                                 msg,
@@ -377,17 +377,15 @@ where
                                 // build a real struct
                                 let error_response = PropagatedErrorResponse {
                                     error_type: "custom_python_exception".to_string(),
-                                    http_code: *code,
+                                    http_code: *http_code,
                                     is_user_facing: *user_facing,
                                     user_message: user_msg.clone(),
                                     details: msg.clone(),
                                 };
-                                // round-trip through serde to get a Resp
-                                let v = serde_json::to_value(&error_response)
-                                    .expect("serializing CustomErrorResponse");
-                                let resp: Resp =
-                                    serde_json::from_value(v).expect("deserializing into Resp");
-                                Annotated::from_data_and_error(resp, msg.clone())
+                                let response_string = serde_json::to_string(&error_response)
+                                    .expect("serializing PropagatedErrorResponse");
+
+                                Annotated::from_error(response_string)
                             }
                         };
                         msg
@@ -436,21 +434,21 @@ where
             let exception_value = e.value(py);
 
             // Check if it has our custom exception attributes
-            if let (Ok(code), Ok(user_facing), Ok(user_msg), Ok(msg)) = (
-                exception_value.getattr("code"),
+            if let (Ok(http_code), Ok(user_facing), Ok(user_msg), Ok(msg)) = (
+                exception_value.getattr("http_code"),
                 exception_value.getattr("user_facing"),
                 exception_value.getattr("user_msg"),
                 exception_value.getattr("msg"),
             ) {
                 // Try to extract the values
-                if let (Ok(code), Ok(user_facing), Ok(user_msg), Ok(msg)) = (
-                    code.extract::<i32>(),
+                if let (Ok(http_code), Ok(user_facing), Ok(user_msg), Ok(msg)) = (
+                    http_code.extract::<i32>(),
                     user_facing.extract::<bool>(),
                     user_msg.extract::<String>(),
                     msg.extract::<String>(),
                 ) {
                     return Some(ResponseProcessingError::PropagatedPythonException {
-                        code,
+                        http_code,
                         user_facing,
                         user_msg,
                         msg,
