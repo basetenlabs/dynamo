@@ -25,7 +25,7 @@ pub use dynamo_runtime::{
         async_trait, AsyncEngine, AsyncEngineContext, AsyncEngineContextProvider, Context, Data,
         ManyOut, ResponseStream, SingleIn,
     },
-    protocols::annotated::Annotated,
+    protocols::annotated::{Annotated,PropagatedErrorResponse},
     CancellationToken, Error, Result,
 };
 use pyo3::prelude::*;
@@ -110,14 +110,6 @@ pub async fn make_token_engine(
     Ok(engine)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct PropagatedPythonResponse {
-    error_type: String,
-    http_code: i32,
-    is_user_facing: bool,
-    user_message: String,
-    details: String,
-}
 
 #[pyclass]
 pub struct PyContext {
@@ -383,7 +375,7 @@ where
                                 msg,
                             } => {
                                 // build a real struct
-                                let error_response = PropagatedPythonResponse {
+                                let error_response = PropagatedErrorResponse {
                                     error_type: "custom_python_exception".to_string(),
                                     http_code: *code,
                                     is_user_facing: *user_facing,

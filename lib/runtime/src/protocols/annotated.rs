@@ -176,3 +176,23 @@ impl<R> Annotated<R> {
 //         Box::pin(stream)
 //     }
 // }
+
+/// A struct to represent the error response from the server
+/// This is used to propagate errors from the server to the client
+/// and to provide additional information about the error
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PropagatedErrorResponse {
+    pub error_type: String,
+
+    // error message, e.g. "Invalid request, 400 Bad Request"
+    pub http_code: i32,
+
+    // show this as http error
+    pub is_user_facing: bool,
+
+    // show this as a user error
+    pub user_message: String,
+
+    // internal details, not user-facing
+    pub details: String,
+}
