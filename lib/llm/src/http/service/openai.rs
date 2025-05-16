@@ -33,7 +33,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio_stream::wrappers::ReceiverStream;
-
+use std::error::Error;
 use super::DeploymentState;
 use super::{
     error::HttpError,
@@ -512,9 +512,28 @@ async fn monitor_for_disconnects(
             Ok(ReceiverStream::new(rx))
         }
         Some(Err(initial_err)) => {
-            // First item from the stream was an error. Return an error to the HTTP handler.
-            tracing::warn!("Initial event in stream for context {} resulted in an error: {}. Aborting SSE setup.", context.id(), initial_err);
+            tracing::warn!(
+                "Initial event in stream for context {} resulted in an error: {}. Aborting SSE setup.",
+                context.id(),
+                initial_err
+            );
             context.stop_generating();
+
+            // Check if the source of axum::Error is an HttpError
+            if let Some(source) = initial_err.source() {
+                if let Some(http_err_ref) = source.downcast_ref::<HttpError>() {
+                    // HttpError found as source. Construct an owned HttpError 
+                    // and use ErrorResponse::from_http_error.
+                    let owned_http_err = HttpError {
+                        code: http_err_ref.code,
+                        message: http_err_ref.message.clone(), // String needs clone
+                    };
+                    return Err(ErrorResponse::from_http_error(owned_http_err));
+                }
+            }
+            
+            // Fallback: if initial_err was not an axum::Error wrapping an HttpError,
+            // or if HttpError was not found as its source.
             Err(ErrorResponse::internal_server_error(&format!(
                 "Failed to start streaming, initial event error: {}",
                 initial_err
@@ -601,7 +620,6 @@ impl<T: Serialize> TryFrom<EventConverter<T>> for Event {
 
     fn try_from(annotated: EventConverter<T>) -> Result<Self, Self::Error> {
         let annotated = annotated.0;
-
         let mut event = Event::default();
 
         if let Some(data) = annotated.data {
@@ -613,6 +631,14 @@ impl<T: Serialize> TryFrom<EventConverter<T>> for Event {
                 let msgs = annotated
                     .comment
                     .unwrap_or_else(|| vec!["unspecified error".to_string()]);
+                // If exactly two parts, try to deserialize the second part into HttpError.
+                if msgs.len() == 2 {
+                    if let Ok(http_error) = serde_json::from_str::<HttpError>(&msgs[1]) {
+                        // Propagate the HttpError. The Axum handler will then use its IntoResponse impl.
+                        return Err(axum::Error::new(http_error));
+                    }
+                }
+                // Fallback using a joined message.
                 return Err(axum::Error::new(msgs.join(" -- ")));
             }
             event = event.event(msg);

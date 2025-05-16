@@ -28,7 +28,7 @@ use futures::Stream;
 use serde::Deserialize;
 use std::{io::Cursor, pin::Pin};
 use tokio_util::codec::{Decoder, FramedRead, LinesCodec};
-
+use tracing::error;
 use super::Annotated;
 
 /// An error that occurs when decoding an SSE stream.
@@ -103,6 +103,7 @@ where
                     Some(comments) => comments.join("\n"),
                     None => "`event: error` detected, but no error message found".to_string(),
                 };
+                error!("Custommm: Error event detected: {}", message);
                 return Err(message);
             }
         }
@@ -119,6 +120,7 @@ where
             id: value.id,
             event: value.event,
             comment: value.comments,
+
         })
     }
 }

@@ -123,6 +123,9 @@ pub struct HttpError {
 impl HttpError {
     #[new]
     pub fn new(code: u16, message: String) -> Self {
+        if code < 400 || code > 599 {
+            panic!("Invalid HTTP error code: {}", code);
+        }
         HttpError { code, message }
     }
 

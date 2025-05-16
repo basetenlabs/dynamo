@@ -30,8 +30,7 @@ class MockEngine:
 
     def generate(self, request, py_context):
         self.counter += 1
-        if self.counter % 2 == 0:
-            raise HttpError(415 + self.counter, 'bad luck, your schema got rejected')
+       
         id = f"chat-{uuid.uuid4()}"
         created = int(time.time())
         model = self.model_name
