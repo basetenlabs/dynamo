@@ -113,6 +113,7 @@ pub async fn make_token_engine(
 
 /// Python Exception for HTTP errors
 #[pyclass(extends=PyException)]
+#[derive(Clone,Serialize, Deserialize)]
 pub struct HttpError {
     pub code: u16,
     pub message: String,
@@ -372,35 +373,40 @@ where
 
                 let mut done = false;
 
-                let response = match process_item::<Resp>(item).await {
+                let response: Annotated<Resp> = match process_item::<Resp>(item).await {
                     Ok(response) => response,
                     Err(e) => {
                         done = true;
 
-                        let msg = match &e {
+                        let msg: Annotated<Resp> = match &e {
                             ResponseProcessingError::DeserializeError(e) => {
                                 // tell the python async generator to stop generating
                                 // right now, this is impossible as we are not passing the context to the python async generator
                                 // todo: add task-local context to the python async generator
                                 ctx.stop_generating();
                                 let msg = format!("critical error: invalid response object from python async generator; application-logic-mismatch: {}", e);
-                                msg
+                                Annotated::from_error(msg)
                             }
                             ResponseProcessingError::PythonException(e) => {
                                 let msg = format!("a python exception was caught while processing the async generator: {}", e);
-                                msg
+                                Annotated::from_error(msg)
                             }
                             ResponseProcessingError::OffloadError(e) => {
                                 let msg = format!("critical error: failed to offload the python async generator to a new thread: {}", e);
-                                msg
+                                Annotated::from_error(msg)
                             }
                             ResponseProcessingError::HttpException { code, message } => {
                                 let msg = format!("python has raised an http error: {}: {}", code, message);
-                                msg
+                                let serde_http = serde_json::to_string(
+                                    &HttpError {
+                                        code: *code,
+                                        message: message.clone(),
+                                    },
+                                ).unwrap();
+                                Annotated::with_http_error(msg, serde_http)
                             }
                         };
-
-                        Annotated::from_error(msg)
+                        msg
                     }
                 };
 
