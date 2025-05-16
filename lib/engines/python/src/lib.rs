@@ -402,7 +402,7 @@ where
                                         code: *code,
                                         message: message.clone(),
                                     },
-                                ).unwrap();
+                                ).unwrap_or_else(|_| "{\"code\":500,\"message\":\"Internal Server Error HTTP Serialize\"}".to_string());
                                 Annotated::with_http_error(msg, serde_http)
                             }
                         };
