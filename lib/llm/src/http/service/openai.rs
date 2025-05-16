@@ -293,7 +293,18 @@ async fn completions(
                     e
                 );
                 // TODO(Michael): check if HTTPError is present in the error chain and return it
-                ErrorResponse::internal_server_error("Failed to fold completions stream")
+                // todo: check if HTTPError is prsent in the error chain and return it
+                if e.to_string().contains("http error") {
+                    ErrorResponse::from_http_error(HttpError {
+                        code: 400,
+                        message: e.to_string(),
+                    })
+                }  else {
+                    ErrorResponse::internal_server_error(&format!(
+                        "Failed to fold chat completions stream: {}",
+                        e
+                    ))
+                }
             })?;
         guard.defuse();
         inflight.mark_ok();
@@ -398,11 +409,19 @@ async fn chat_completions(
                     request_id,
                     e
                 );
+
                 // todo: check if HTTPError is prsent in the error chain and return it
-                ErrorResponse::internal_server_error(&format!(
-                    "Failed to fold chat completions stream: {}",
-                    e
-                ))
+                if e.to_string().contains("http error") {
+                    ErrorResponse::from_http_error(HttpError {
+                        code: 400,
+                        message: e.to_string(),
+                    })
+                }  else {
+                    ErrorResponse::internal_server_error(&format!(
+                        "Failed to fold chat completions stream: {}",
+                        e
+                    ))
+                }
             })?;
         guard.defuse();
         inflight.mark_ok();
