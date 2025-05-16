@@ -222,7 +222,9 @@ impl Metrics {
         {
             // Prune to last 60 seconds
             let now = Instant::now();
-            times.retain(|(start_time, _)| now.duration_since(*start_time) <= Duration::from_secs(60));
+            times.retain(|(start_time, _)| {
+                now.duration_since(*start_time) <= Duration::from_secs(60)
+            });
             // Check again after pruning
             if times.is_empty() {
                 return (None, None);

@@ -28,8 +28,8 @@ pub use dynamo_runtime::{
     protocols::annotated::Annotated,
     CancellationToken, Error, Result,
 };
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::{exceptions::PyException};
 use pyo3::types::{IntoPyDict, PyDict};
 use pyo3_async_runtimes::TaskLocals;
 use pythonize::{depythonize, pythonize};
@@ -113,7 +113,7 @@ pub async fn make_token_engine(
 
 /// Python Exception for HTTP errors
 #[pyclass(extends=PyException)]
-#[derive(Clone,Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HttpError {
     pub code: u16,
     pub message: String,
@@ -290,10 +290,7 @@ enum ResponseProcessingError {
     PythonException(String),
 
     #[error("python http exception: {code}: {message}")]
-    HttpException {
-        code: u16,
-        message: String,
-    },
+    HttpException { code: u16, message: String },
 
     #[error("deserialize error: {0}")]
     DeserializeError(String),
@@ -399,7 +396,10 @@ where
                                 Annotated::from_error(msg)
                             }
                             ResponseProcessingError::HttpException { code, message } => {
-                                let msg = format!("python has raised an http error: {}: {}", code, message);
+                                let msg = format!(
+                                    "python has raised an http error: {}: {}",
+                                    code, message
+                                );
                                 let serde_http = serde_json::to_string(
                                     &HttpError {
                                         code: *code,

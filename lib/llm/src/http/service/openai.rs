@@ -13,6 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::DeploymentState;
+use super::{
+    error::HttpError,
+    metrics::{Endpoint, InflightGuard},
+    RouteDoc,
+};
 use axum::{
     extract::State,
     http::HeaderMap,
@@ -26,6 +32,7 @@ use axum::{
 };
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::error::Error;
 use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
@@ -33,13 +40,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio_stream::wrappers::ReceiverStream;
-use std::error::Error;
-use super::DeploymentState;
-use super::{
-    error::HttpError,
-    metrics::{Endpoint, InflightGuard},
-    RouteDoc,
-};
 
 use crate::protocols::openai::{
     chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse, nvext::NvExt,
@@ -132,6 +132,38 @@ impl ErrorResponse {
 impl From<HttpError> for ErrorResponse {
     fn from(err: HttpError) -> Self {
         ErrorResponse { error: err.message }
+    }
+}
+
+// A RAII guard to ensure that the context is stopped when the request is dropped.
+// Request fututures are dropped in axum when the client disconnects.
+// https://github.com/tokio-rs/axum/discussions/1094
+// may be defused to prevent stopping the context and send a control message via
+// stop_generating
+struct CtxDropGuard {
+    ctx: Arc<dyn AsyncEngineContext>,
+    is_defused: bool,
+}
+
+impl CtxDropGuard {
+    fn new(ctx: Arc<dyn AsyncEngineContext>) -> Self {
+        CtxDropGuard {
+            ctx,
+            is_defused: false,
+        }
+    }
+
+    fn defuse(&mut self) {
+        self.is_defused = true;
+    }
+}
+
+impl Drop for CtxDropGuard {
+    fn drop(&mut self) {
+        if !self.is_defused {
+            tracing::info!("Dropping context for request_id: {}", self.ctx.id());
+            self.ctx.stop_generating();
+        }
     }
 }
 
@@ -251,6 +283,7 @@ async fn completions(
 
         Ok(sse_stream.into_response())
     } else {
+        let mut guard = CtxDropGuard::new(ctx);
         let response = CompletionResponse::from_annotated_stream(stream.into())
             .await
             .map_err(|e| {
@@ -262,7 +295,7 @@ async fn completions(
                 // TODO(Michael): check if HTTPError is present in the error chain and return it
                 ErrorResponse::internal_server_error("Failed to fold completions stream")
             })?;
-
+        guard.defuse();
         inflight.mark_ok();
         Ok(Json(response).into_response())
     }
@@ -356,6 +389,7 @@ async fn chat_completions(
 
         Ok(sse_stream.into_response())
     } else {
+        let mut guard = CtxDropGuard::new(ctx);
         let response = NvCreateChatCompletionResponse::from_annotated_stream(stream.into())
             .await
             .map_err(|e| {
@@ -370,7 +404,7 @@ async fn chat_completions(
                     e
                 ))
             })?;
-
+        guard.defuse();
         inflight.mark_ok();
         Ok(Json(response).into_response())
     }
@@ -494,11 +528,15 @@ async fn monitor_for_disconnects(
 
     match stream.next().await {
         None => {
-            // TODO: Simplify, there should be no empty stream. 
-            tracing::warn!("Input stream for context {} was empty. Proceeding with empty SSE stream.", context.id());
+            // TODO: Simplify, there should be no empty stream.
+            tracing::warn!(
+                "Input stream for context {} was empty. Proceeding with empty SSE stream.",
+                context.id()
+            );
             tokio::spawn(async move {
                 // inflight is moved here
-                if !tx.is_closed() { // Check if client is still there
+                if !tx.is_closed() {
+                    // Check if client is still there
                     if tx.send(Ok(Event::default().data("[DONE]"))).await.is_ok() {
                         inflight.mark_streaming_error();
                     } else {
@@ -519,7 +557,7 @@ async fn monitor_for_disconnects(
             // Check if the source of axum::Error is an HttpError
             if let Some(source) = initial_err.source() {
                 if let Some(http_err_ref) = source.downcast_ref::<HttpError>() {
-                    // HttpError found as source. Construct an owned HttpError 
+                    // HttpError found as source. Construct an owned HttpError
                     // and use ErrorResponse::from_http_error.
                     inflight.mark_downstream_http_error();
                     let owned_http_err = HttpError {
@@ -539,7 +577,7 @@ async fn monitor_for_disconnects(
                 context.id(),
                 initial_err
             );
-            
+
             // Fallback: if initial_err was not an axum::Error wrapping an HttpError,
             // or if HttpError was not found as its source.
             Err(ErrorResponse::internal_server_error(&format!(
@@ -549,7 +587,10 @@ async fn monitor_for_disconnects(
         }
         Some(Ok(first_event)) => {
             // First item was successful. Proceed with streaming.
-            tracing::debug!("First event successful for context {}. Starting SSE forwarder task.", context.id());
+            tracing::debug!(
+                "First event successful for context {}. Starting SSE forwarder task.",
+                context.id()
+            );
             tokio::spawn(async move {
                 // inflight is moved here
                 inflight.add_event_time(); // For the first event
@@ -579,7 +620,7 @@ async fn monitor_for_disconnects(
                             // will typically terminate the connection.
                             tracing::warn!("Error in ongoing SSE event stream for context {}: {}. Propagating to client.", context.id(), err);
                             let send_err_result = tx.send(Err(err)).await;
-                            inflight.mark_streaming_error(); 
+                            inflight.mark_streaming_error();
                             context.stop_generating(); // Tell engine to stop.
 
                             if send_err_result.is_err() {
@@ -602,8 +643,11 @@ async fn monitor_for_disconnects(
                         inflight.mark_client_drop();
                     }
                 } else {
-                     tracing::debug!("Input stream ended for context {}, but client was already disconnected.", context.id());
-                     // inflight status should have been set in the loop or when sending first_event
+                    tracing::debug!(
+                        "Input stream ended for context {}, but client was already disconnected.",
+                        context.id()
+                    );
+                    // inflight status should have been set in the loop or when sending first_event
                 }
             });
             Ok(ReceiverStream::new(rx))

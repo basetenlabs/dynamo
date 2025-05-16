@@ -16,10 +16,10 @@
 #![allow(clippy::module_inception)]
 use std::error;
 
-use thiserror::Error;
-use serde::{Deserialize, Serialize};
-use axum::response::{IntoResponse, Response};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tracing::warn;
 
 #[derive(Debug, Error)]
@@ -49,6 +49,10 @@ impl IntoResponse for HttpError {
             warn!("Invalid HTTP error code: {} {}", self.code, &self.message);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-        (StatusCode::from_u16(self.code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), self.message).into_response()
+        (
+            StatusCode::from_u16(self.code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            self.message,
+        )
+            .into_response()
     }
 }

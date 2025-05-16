@@ -51,9 +51,7 @@ impl<R> Annotated<R> {
         }
     }
 
-    pub fn with_http_error(
-        error: String, error_http: String, 
-    ) -> Self {
+    pub fn with_http_error(error: String, error_http: String) -> Self {
         Self {
             data: None,
             id: None,

@@ -23,8 +23,8 @@ use async_openai::types::{ChatCompletionMessageToolCall, ChatCompletionToolType,
 use futures::{Stream, StreamExt};
 use std::{
     collections::{BTreeMap, HashMap},
-    pin::Pin,
     convert::TryFrom,
+    pin::Pin,
 };
 
 /// A type alias for a pinned, dynamically-dispatched stream that is `Send` and `Sync`.
@@ -229,7 +229,8 @@ impl DeltaAggregator {
         // Collect results, propagating the first error if any
         let mut choices: Vec<async_openai::types::ChatChoice> = choices_results
             .into_iter()
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, String>>(
+        )?;
 
         choices.sort_by(|a, b| a.index.cmp(&b.index));
 
