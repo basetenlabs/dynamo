@@ -13,6 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::DeploymentState;
+use super::{
+    error::HttpError,
+    metrics::{Endpoint, InflightGuard},
+    RouteDoc,
+};
 use axum::{
     extract::State,
     http::HeaderMap,
@@ -26,6 +32,7 @@ use axum::{
 };
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::error::Error;
 use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
@@ -33,13 +40,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio_stream::wrappers::ReceiverStream;
-
-use super::DeploymentState;
-use super::{
-    error::HttpError,
-    metrics::{Endpoint, InflightGuard},
-    RouteDoc,
-};
 
 use crate::protocols::openai::{
     chat_completions::NvCreateChatCompletionResponse, completions::CompletionResponse, nvext::NvExt,
@@ -132,6 +132,38 @@ impl ErrorResponse {
 impl From<HttpError> for ErrorResponse {
     fn from(err: HttpError) -> Self {
         ErrorResponse { error: err.message }
+    }
+}
+
+// A RAII guard to ensure that the context is stopped when the request is dropped.
+// Request fututures are dropped in axum when the client disconnects.
+// https://github.com/tokio-rs/axum/discussions/1094
+// may be defused to prevent stopping the context and send a control message via
+// stop_generating
+struct CtxDropGuard {
+    ctx: Arc<dyn AsyncEngineContext>,
+    is_defused: bool,
+}
+
+impl CtxDropGuard {
+    fn new(ctx: Arc<dyn AsyncEngineContext>) -> Self {
+        CtxDropGuard {
+            ctx,
+            is_defused: false,
+        }
+    }
+
+    fn defuse(&mut self) {
+        self.is_defused = true;
+    }
+}
+
+impl Drop for CtxDropGuard {
+    fn drop(&mut self) {
+        if !self.is_defused {
+            tracing::info!("Dropping context for request_id: {}", self.ctx.id());
+            self.ctx.stop_generating();
+        }
     }
 }
 
@@ -241,7 +273,7 @@ async fn completions(
 
     if streaming {
         let stream = stream.map(|response| Event::try_from(EventConverter::from(response)));
-        let stream = monitor_for_disconnects(stream.boxed(), ctx, inflight).await;
+        let stream = monitor_for_disconnects(stream.boxed(), ctx, inflight).await?;
 
         let mut sse_stream = Sse::new(stream);
 
@@ -251,6 +283,7 @@ async fn completions(
 
         Ok(sse_stream.into_response())
     } else {
+        let mut guard = CtxDropGuard::new(ctx);
         let response = CompletionResponse::from_annotated_stream(stream.into())
             .await
             .map_err(|e| {
@@ -259,9 +292,21 @@ async fn completions(
                     request_id,
                     e
                 );
-                ErrorResponse::internal_server_error("Failed to fold completions stream")
+                // TODO(Michael): check if HTTPError is present in the error chain and return it
+                // todo: check if HTTPError is prsent in the error chain and return it
+                if e.to_string().contains("HTTPExceptionDetected") {
+                    ErrorResponse::from_http_error(HttpError {
+                        code: 400,
+                        message: e.to_string(),
+                    })
+                }  else {
+                    ErrorResponse::internal_server_error(&format!(
+                        "Failed to fold chat completions stream: {}",
+                        e
+                    ))
+                }
             })?;
-
+        guard.defuse();
         inflight.mark_ok();
         Ok(Json(response).into_response())
     }
@@ -345,7 +390,7 @@ async fn chat_completions(
 
     if streaming {
         let stream = stream.map(|response| Event::try_from(EventConverter::from(response)));
-        let stream = monitor_for_disconnects(stream.boxed(), ctx, inflight).await;
+        let stream = monitor_for_disconnects(stream.boxed(), ctx, inflight).await?;
 
         let mut sse_stream = Sse::new(stream);
 
@@ -355,6 +400,7 @@ async fn chat_completions(
 
         Ok(sse_stream.into_response())
     } else {
+        let mut guard = CtxDropGuard::new(ctx);
         let response = NvCreateChatCompletionResponse::from_annotated_stream(stream.into())
             .await
             .map_err(|e| {
@@ -363,12 +409,21 @@ async fn chat_completions(
                     request_id,
                     e
                 );
-                ErrorResponse::internal_server_error(&format!(
-                    "Failed to fold chat completions stream: {}",
-                    e
-                ))
-            })?;
 
+                // todo: check if HTTPError is prsent in the error chain and return it
+                if e.to_string().contains("HTTPExceptionDetected") {
+                    ErrorResponse::from_http_error(HttpError {
+                        code: 400,
+                        message: e.to_string(),
+                    })
+                }  else {
+                    ErrorResponse::internal_server_error(&format!(
+                        "Failed to fold chat completions stream: {}",
+                        e
+                    ))
+                }
+            })?;
+        guard.defuse();
         inflight.mark_ok();
         Ok(Json(response).into_response())
     }
@@ -478,49 +533,145 @@ struct ModelListing {
     owned_by: String,
 }
 
-/// This method will consume a stream of SSE events and forward them to a new stream defined by a tokio channel.
-/// In this way, if the downstream is dropped, then the upstream will be unable to send any more events. This is
-/// how we can monitor for disconnects and stop the generation of completions.
-///
-/// If a disconnect is detected, then the context will issue a `stop_generating` call to the context which will
-/// propagate the cancellation signal to the backend.
+/// Monitors a stream of SSE events.
+/// - If the first event is an error, returns an `Err` to allow the caller to send an HTTP error.
+/// - Otherwise, sets up a `ReceiverStream` to forward events.
+/// - Handles client disconnects by stopping the engine and updating metrics.
+/// - Propagates subsequent stream errors through the `ReceiverStream`.
 async fn monitor_for_disconnects(
-    stream: Pin<
-        Box<dyn Stream<Item = Result<axum::response::sse::Event, axum::Error>> + std::marker::Send>,
-    >,
+    mut stream: Pin<Box<dyn Stream<Item = Result<Event, axum::Error>> + Send>>,
     context: Arc<dyn AsyncEngineContext>,
-    inflight: InflightGuard,
-) -> ReceiverStream<Result<Event, axum::Error>> {
+    mut inflight: InflightGuard, // inflight is moved and its state managed by this function or its spawned task
+) -> Result<ReceiverStream<Result<Event, axum::Error>>, (StatusCode, Json<ErrorResponse>)> {
     let (tx, rx) = tokio::sync::mpsc::channel(8);
 
-    tokio::spawn(async move {
-        let mut inflight = inflight;
-        let mut stream = stream;
-        while let Some(event) = stream.next().await {
-            let event = match event {
-                Ok(event) => Ok(event),
-                Err(err) => Ok(Event::default().event("error").comment(err.to_string())),
-            };
+    match stream.next().await {
+        None => {
+            // TODO: Simplify, there should be no empty stream.
+            tracing::warn!(
+                "Input stream for context {} was empty. Proceeding with empty SSE stream.",
+                context.id()
+            );
+            tokio::spawn(async move {
+                // inflight is moved here
+                if !tx.is_closed() {
+                    // Check if client is still there
+                    if tx.send(Ok(Event::default().data("[DONE]"))).await.is_ok() {
+                        inflight.mark_streaming_error();
+                    } else {
+                        tracing::trace!("SSE client disconnected (before [DONE] for empty stream) for context: {}.", context.id());
+                        context.stop_generating(); // Ensure cleanup if client disconnected
+                        inflight.mark_client_drop();
+                    }
+                } else {
+                    context.stop_generating(); // Ensure cleanup if client disconnected
+                    inflight.mark_client_drop();
+                }
+            });
+            Ok(ReceiverStream::new(rx))
+        }
+        Some(Err(initial_err)) => {
+            context.stop_generating();
 
-            // send event duration to inflight
-            inflight.add_event_time();
-
-            if (tx.send(event).await).is_err() {
-                tracing::trace!("Forwarding SSE stream was dropped; breaking loop");
-                context.stop_generating();
-                inflight.mark_client_drop();
-                break;
+            // Check if the source of axum::Error is an HttpError
+            if let Some(source) = initial_err.source() {
+                if let Some(http_err_ref) = source.downcast_ref::<HttpError>() {
+                    // HttpError found as source. Construct an owned HttpError
+                    // and use ErrorResponse::from_http_error.
+                    inflight.mark_downstream_http_error();
+                    let owned_http_err = HttpError {
+                        code: http_err_ref.code,
+                        message: http_err_ref.message.clone(), // String needs clone
+                    };
+                    tracing::info!(
+                        "Returining HTTP error {}: {}",
+                        owned_http_err.code,
+                        owned_http_err.message
+                    );
+                    return Err(ErrorResponse::from_http_error(owned_http_err));
+                }
             }
-        }
+            tracing::warn!(
+                "Initial event in stream for context {} resulted in an error: {}. Aborting SSE setup.",
+                context.id(),
+                initial_err
+            );
 
-        // the stream completed successfully - mark as ok
-        // this will increment the request counter with an "success" status
-        if tx.send(Ok(Event::default().data("[DONE]"))).await.is_ok() {
-            inflight.mark_ok();
+            // Fallback: if initial_err was not an axum::Error wrapping an HttpError,
+            // or if HttpError was not found as its source.
+            Err(ErrorResponse::internal_server_error(&format!(
+                "Failed to start streaming, initial event error: {}",
+                initial_err
+            )))
         }
-    });
+        Some(Ok(first_event)) => {
+            // First item was successful. Proceed with streaming.
+            tracing::debug!(
+                "First event successful for context {}. Starting SSE forwarder task.",
+                context.id()
+            );
+            tokio::spawn(async move {
+                // inflight is moved here
+                inflight.add_event_time(); // For the first event
+                if tx.send(Ok(first_event)).await.is_err() {
+                    tracing::trace!("SSE client disconnected (while sending first event) for context: {}. Stopping generation.", context.id());
+                    context.stop_generating();
+                    inflight.mark_client_drop();
+                    return;
+                }
 
-    ReceiverStream::new(rx)
+                // Process subsequent events
+                while let Some(event_result) = stream.next().await {
+                    inflight.add_event_time(); // For subsequent events
+
+                    match event_result {
+                        Ok(event) => {
+                            if tx.send(Ok(event)).await.is_err() {
+                                tracing::trace!("SSE client disconnected (while sending subsequent event) for context: {}. Stopping generation.", context.id());
+                                context.stop_generating();
+                                inflight.mark_client_drop();
+                                return;
+                            }
+                        }
+                        Err(err) => {
+                            // An error occurred in the stream after it had started.
+                            // Propagate this error through the SSE channel. Axum's Sse handler
+                            // will typically terminate the connection.
+                            tracing::warn!("Error in ongoing SSE event stream for context {}: {}. Propagating to client.", context.id(), err);
+                            let send_err_result = tx.send(Err(err)).await;
+                            inflight.mark_streaming_error();
+                            context.stop_generating(); // Tell engine to stop.
+
+                            if send_err_result.is_err() {
+                                tracing::trace!("SSE client disconnected (before error could be sent for ongoing stream) for context: {}.", context.id());
+                                // If sending the error itself failed, it's definitely a client drop.
+                                inflight.mark_client_drop(); // Override mark_error
+                            }
+                            return; // Exit task
+                        }
+                    }
+                }
+
+                // Input stream finished naturally.
+                if !tx.is_closed() {
+                    if tx.send(Ok(Event::default().data("[DONE]"))).await.is_ok() {
+                        inflight.mark_ok();
+                    } else {
+                        tracing::trace!("SSE client disconnected (before [DONE] could be sent) for context: {}.", context.id());
+                        context.stop_generating();
+                        inflight.mark_client_drop();
+                    }
+                } else {
+                    tracing::debug!(
+                        "Input stream ended for context {}, but client was already disconnected.",
+                        context.id()
+                    );
+                    // inflight status should have been set in the loop or when sending first_event
+                }
+            });
+            Ok(ReceiverStream::new(rx))
+        }
+    }
 }
 
 struct EventConverter<T>(Annotated<T>);
@@ -540,7 +691,6 @@ impl<T: Serialize> TryFrom<EventConverter<T>> for Event {
 
     fn try_from(annotated: EventConverter<T>) -> Result<Self, Self::Error> {
         let annotated = annotated.0;
-
         let mut event = Event::default();
 
         if let Some(data) = annotated.data {
@@ -552,6 +702,14 @@ impl<T: Serialize> TryFrom<EventConverter<T>> for Event {
                 let msgs = annotated
                     .comment
                     .unwrap_or_else(|| vec!["unspecified error".to_string()]);
+                // If exactly two parts, try to deserialize the second part into HttpError.
+                if msgs.len() == 2 {
+                    if let Ok(http_error) = serde_json::from_str::<HttpError>(&msgs[1]) {
+                        // Propagate the HttpError. The Axum handler will then use its IntoResponse impl.
+                        return Err(axum::Error::new(http_error));
+                    }
+                }
+                // Fallback using a joined message.
                 return Err(axum::Error::new(msgs.join(" -- ")));
             }
             event = event.event(msg);

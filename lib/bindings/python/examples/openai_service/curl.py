@@ -63,32 +63,39 @@ headers = {
     "accept": "application/json",
     "Content-Type": "application/json"
 }
-data = {
-    "model": "mock_model",
-    "messages": [
-        {
-            "role": "user",
-            "content": "Hello! How are you?"
-        }
-    ],
-    "max_tokens": 64,
-    "stream": True,
-    "temperature": 0.7,
-    "top_p": 0.9,
-    "frequency_penalty": 0.1,
-    "presence_penalty": 0.2,
-    "top_k": 5
-}
-response = requests.post(url, headers=headers, data=json.dumps(data), stream=True)
-if response.status_code == 200:
-    response_agg = ""
-    for line in response.iter_lines():
-        if line and not line.startswith(b"data: [DONE]"):
-            try:
-                json_line = json.loads(line)
-                response_agg += json_line["choices"][0]["delta"]["content"]
-            except json.JSONDecodeError:
-                print("Error decoding JSON:", line)
-    print("Response:", response_agg)
-else:
-    print("Error:", response.status_code, response.text)
+
+for stream in [True, False, False, True]:
+    print(f"### Stream: {stream}")
+    data = {
+        "model": "mock_model",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hello! How are you?"
+            }
+        ],
+        "max_tokens": 64,
+        "stream": stream,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.2,
+        "top_k": 5
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(data), stream=True)
+    if response.status_code == 200:
+        if stream:
+            response_agg = ""
+            for line in response.iter_lines():
+                if line and not line.startswith(b"data: [DONE]"):
+                    try:
+                        json_line = json.loads(line[len(b"data: "):])
+                        response_agg += json_line["choices"][0]["delta"]["content"]
+                        
+                    except json.JSONDecodeError:
+                        print("Error decoding JSON:", line)
+        else:
+            response_agg = response.text
+        print("Response:", response_agg)
+    else:
+        print("Error:", response.status_code, response.text)

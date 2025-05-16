@@ -13,7 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::module_inception)]
+use std::error;
+
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::warn;
 
 #[derive(Debug, Error)]
 pub enum ServiceHttpError {
@@ -27,9 +34,25 @@ pub enum ServiceHttpError {
 /// Implementation of the Completion Engines served by the HTTP service should
 /// map their custom errors to to this error type if they wish to return error
 /// codes besides 500.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Serialize, Deserialize)]
 #[error("HTTP Error {code}: {message}")]
 pub struct HttpError {
     pub code: u16,
     pub message: String,
+}
+
+impl IntoResponse for HttpError {
+    fn into_response(self) -> Response {
+        // Build the response with the given status code and JSON error body.
+        // check if code between 400 and 599
+        if self.code < 400 || self.code > 599 {
+            warn!("Invalid HTTP error code: {} {}", self.code, &self.message);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        (
+            StatusCode::from_u16(self.code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            self.message,
+        )
+            .into_response()
+    }
 }

@@ -51,6 +51,15 @@ impl<R> Annotated<R> {
         }
     }
 
+    pub fn with_http_error(error: String, error_http: String) -> Self {
+        Self {
+            data: None,
+            id: None,
+            event: Some("error".to_string()),
+            comment: Some(vec![error, error_http]),
+        }
+    }
+
     /// Create a new annotated stream from the given data
     pub fn from_data(data: R) -> Self {
         Self {

@@ -28,6 +28,7 @@ pub use dynamo_runtime::{
     protocols::annotated::Annotated,
     CancellationToken, Error, Result,
 };
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict};
 use pyo3_async_runtimes::TaskLocals;
@@ -108,6 +109,35 @@ pub async fn make_token_engine(
     let engine = new_engine(cancel_token, py_file, py_args).await?;
     let engine: ExecutionContext = Arc::new(engine);
     Ok(engine)
+}
+
+/// Python Exception for HTTP errors
+#[pyclass(extends=PyException)]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct HttpError {
+    pub code: u16,
+    pub message: String,
+}
+
+#[pymethods]
+impl HttpError {
+    #[new]
+    pub fn new(code: u16, message: String) -> Self {
+        if code < 400 || code > 599 {
+            panic!("Invalid HTTP error code: {}", code);
+        }
+        HttpError { code, message }
+    }
+
+    #[getter]
+    fn code(&self) -> u16 {
+        self.code
+    }
+
+    #[getter]
+    fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 #[pyclass]
@@ -259,6 +289,9 @@ enum ResponseProcessingError {
     #[error("python exception: {0}")]
     PythonException(String),
 
+    #[error("python http exception: {code}: {message}")]
+    HttpException { code: u16, message: String },
+
     #[error("deserialize error: {0}")]
     DeserializeError(String),
 
@@ -340,31 +373,43 @@ where
 
                 let mut done = false;
 
-                let response = match process_item::<Resp>(item).await {
+                let response: Annotated<Resp> = match process_item::<Resp>(item).await {
                     Ok(response) => response,
                     Err(e) => {
                         done = true;
 
-                        let msg = match &e {
+                        let msg: Annotated<Resp> = match &e {
                             ResponseProcessingError::DeserializeError(e) => {
                                 // tell the python async generator to stop generating
                                 // right now, this is impossible as we are not passing the context to the python async generator
                                 // todo: add task-local context to the python async generator
                                 ctx.stop_generating();
                                 let msg = format!("critical error: invalid response object from python async generator; application-logic-mismatch: {}", e);
-                                msg
+                                Annotated::from_error(msg)
                             }
                             ResponseProcessingError::PythonException(e) => {
                                 let msg = format!("a python exception was caught while processing the async generator: {}", e);
-                                msg
+                                Annotated::from_error(msg)
                             }
                             ResponseProcessingError::OffloadError(e) => {
                                 let msg = format!("critical error: failed to offload the python async generator to a new thread: {}", e);
-                                msg
+                                Annotated::from_error(msg)
+                            }
+                            ResponseProcessingError::HttpException { code, message } => {
+                                let msg = format!(
+                                    "HTTPExceptionDetected: {}: {}",
+                                    code, message
+                                );
+                                let serde_http = serde_json::to_string(
+                                    &HttpError {
+                                        code: *code,
+                                        message: message.clone(),
+                                    },
+                                ).unwrap_or_else(|_| "{\"code\":500,\"message\":\"Internal Server Error HTTP Serialize\"}".to_string());
+                                Annotated::with_http_error(msg, serde_http)
                             }
                         };
-
-                        Annotated::from_error(msg)
+                        msg
                     }
                 };
 
@@ -403,21 +448,43 @@ async fn process_item<Resp>(
 where
     Resp: Data + for<'de> Deserialize<'de>,
 {
-    let item = item.map_err(|e| {
-        println!();
-        Python::with_gil(|py| e.display(py));
-        ResponseProcessingError::PythonException(e.to_string())
-    })?;
+    // Check if the Python call resulted in an error.
+    let py_obj = match item {
+        Ok(obj) => obj,
+        Err(py_err) => {
+            return Python::with_gil(|py| {
+                // Try to extract an HttpError from the Python exception.
+                match py_err
+                    .clone_ref(py)
+                    .into_value(py)
+                    .extract::<PyRef<HttpError>>(py)
+                {
+                    Ok(http_error_instance) => {
+                        tracing::info!(
+                            "Raising HttpError {}: {}",
+                            http_error_instance.code,
+                            http_error_instance.message
+                        );
+                        Err(ResponseProcessingError::HttpException {
+                            code: http_error_instance.code,
+                            message: http_error_instance.message.clone(),
+                        })
+                    }
+                    Err(_) => Err(ResponseProcessingError::PythonException(py_err.to_string())),
+                }
+            });
+        }
+    };
+
+    // Offload the deserialization onto a blocking task.
     let response = tokio::task::spawn_blocking(move || {
-        Python::with_gil(|py| depythonize::<Resp>(&item.into_bound(py)))
+        Python::with_gil(|py| depythonize::<Resp>(&py_obj.into_bound(py)))
     })
     .await
     .map_err(|e| ResponseProcessingError::OffloadError(e.to_string()))?
     .map_err(|e| ResponseProcessingError::DeserializeError(e.to_string()))?;
 
-    let response = Annotated::from_data(response);
-
-    Ok(response)
+    Ok(Annotated::from_data(response))
 }
 
 /// On Mac embedded Python interpreters do not pick up the virtual env.

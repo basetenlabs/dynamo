@@ -29,7 +29,7 @@ from dynamo._core import DistributedRuntime as DistributedRuntime
 from dynamo._core import EtcdKvCache as EtcdKvCache
 from dynamo._core import ModelDeploymentCard as ModelDeploymentCard
 from dynamo._core import OAIChatPreprocessor as OAIChatPreprocessor
-
+from dynamo._core import HttpError
 
 def dynamo_worker(static=False):
     def decorator(func):
@@ -80,7 +80,7 @@ def dynamo_endpoint(
                     else:
                         raise ValueError(f"Invalid request: {args[pos]}, {args}")
             except ValidationError as e:
-                raise ValueError(f"Invalid request: {e}")
+                raise HttpError(400, f"Invalid request: {e}")
 
             # Wrap the async generator
             async for item in func(*args_list, **kwargs):
