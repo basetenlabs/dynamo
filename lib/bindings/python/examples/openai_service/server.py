@@ -39,6 +39,8 @@ class MockEngine:
 
         async def generator():
             num_chunks = 5
+            if self.counter % 2 == 0:
+                raise HttpError(415 + self.counter, 'bad luck, your schema got rejected')
             for i in range(num_chunks):
                 mock_content = f"chunk{i}"
                 finish_reason = "stop" if (i == num_chunks - 1) else None
