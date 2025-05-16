@@ -51,7 +51,7 @@ class MockEngine:
                     "choices": [
                         {
                             "index": i,
-                            "delta": {"role": None, "content": mock_content},
+                            "delta": {"role": "assistant", "content": mock_content},
                             "logprobs": None,
                             "finish_reason": finish_reason,
                         }
