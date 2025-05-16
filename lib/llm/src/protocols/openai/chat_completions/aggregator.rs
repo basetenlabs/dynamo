@@ -24,6 +24,7 @@ use futures::{Stream, StreamExt};
 use std::{
     collections::{BTreeMap, HashMap},
     pin::Pin,
+    convert::TryFrom,
 };
 
 /// A type alias for a pinned, dynamically-dispatched stream that is `Send` and `Sync`.
@@ -219,11 +220,16 @@ impl DeltaAggregator {
         };
 
         // Extract aggregated choices and sort them by index.
-        let mut choices: Vec<_> = aggregator
+        let choices_results: Vec<Result<async_openai::types::ChatChoice, String>> = aggregator
             .choices
             .into_values()
-            .map(async_openai::types::ChatChoice::from)
+            .map(async_openai::types::ChatChoice::try_from)
             .collect();
+
+        // Collect results, propagating the first error if any
+        let mut choices: Vec<async_openai::types::ChatChoice> = choices_results
+            .into_iter()
+            .collect::<Result<Vec<_>, String>>()?;
 
         choices.sort_by(|a, b| a.index.cmp(&b.index));
 
@@ -246,12 +252,10 @@ impl DeltaAggregator {
 }
 
 #[allow(deprecated)]
-impl From<DeltaChoice> for async_openai::types::ChatChoice {
-    /// Converts a [`DeltaChoice`] into an [`async_openai::types::ChatChoice`].
-    ///
-    /// # Note
-    /// The `function_call` field is deprecated.
-    fn from(delta: DeltaChoice) -> Self {
+impl TryFrom<DeltaChoice> for async_openai::types::ChatChoice {
+    type Error = String;
+
+    fn try_from(delta: DeltaChoice) -> Result<Self, Self::Error> {
         // Convert accumulated tool calls into the final format
         let final_tool_calls: Option<Vec<ChatCompletionMessageToolCall>> =
             if delta.tool_calls.is_empty() {
@@ -261,7 +265,6 @@ impl From<DeltaChoice> for async_openai::types::ChatChoice {
                     .tool_calls
                     .into_values()
                     .filter_map(|acc| {
-                        // Ensure we have the necessary parts (ID should always be present if chunks existed)
                         acc.id.map(|id| ChatCompletionMessageToolCall {
                             id,
                             r#type: ChatCompletionToolType::Function,
@@ -286,9 +289,16 @@ impl From<DeltaChoice> for async_openai::types::ChatChoice {
             Some(delta.text)
         };
 
-        async_openai::types::ChatChoice {
+        let role = delta.role.ok_or_else(|| {
+            format!(
+                "Failed to aggregate choice at index {}: role was not provided in any stream delta.",
+                delta.index
+            )
+        })?;
+
+        Ok(async_openai::types::ChatChoice {
             message: async_openai::types::ChatCompletionResponseMessage {
-                role: delta.role.expect("delta should have a Role"),
+                role,
                 content: final_content,
                 tool_calls: final_tool_calls,
                 refusal: None,
@@ -298,7 +308,7 @@ impl From<DeltaChoice> for async_openai::types::ChatChoice {
             index: delta.index,
             finish_reason: delta.finish_reason,
             logprobs: delta.logprobs,
-        }
+        })
     }
 }
 

@@ -75,7 +75,7 @@ for stream in [True, False, False, True]:
             }
         ],
         "max_tokens": 64,
-        "stream": True,
+        "stream": stream,
         "temperature": 0.7,
         "top_p": 0.9,
         "frequency_penalty": 0.1,
@@ -89,8 +89,9 @@ for stream in [True, False, False, True]:
             for line in response.iter_lines():
                 if line and not line.startswith(b"data: [DONE]"):
                     try:
-                        json_line = json.loads(line)
+                        json_line = json.loads(line[len(b"data: "):])
                         response_agg += json_line["choices"][0]["delta"]["content"]
+                        
                     except json.JSONDecodeError:
                         print("Error decoding JSON:", line)
         else:
