@@ -294,7 +294,7 @@ async fn completions(
                 );
                 // TODO(Michael): check if HTTPError is present in the error chain and return it
                 // todo: check if HTTPError is prsent in the error chain and return it
-                if e.to_string().contains("http error") {
+                if e.to_string().contains("HTTPExceptionDetected") {
                     ErrorResponse::from_http_error(HttpError {
                         code: 400,
                         message: e.to_string(),
@@ -411,7 +411,7 @@ async fn chat_completions(
                 );
 
                 // todo: check if HTTPError is prsent in the error chain and return it
-                if e.to_string().contains("http error") {
+                if e.to_string().contains("HTTPExceptionDetected") {
                     ErrorResponse::from_http_error(HttpError {
                         code: 400,
                         message: e.to_string(),

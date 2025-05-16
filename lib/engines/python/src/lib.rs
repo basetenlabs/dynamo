@@ -397,7 +397,7 @@ where
                             }
                             ResponseProcessingError::HttpException { code, message } => {
                                 let msg = format!(
-                                    "python has raised an http error: {}: {}",
+                                    "HTTPExceptionDetected: {}: {}",
                                     code, message
                                 );
                                 let serde_http = serde_json::to_string(
