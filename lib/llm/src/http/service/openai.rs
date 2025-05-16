@@ -494,13 +494,13 @@ async fn monitor_for_disconnects(
 
     match stream.next().await {
         None => {
-            // Stream was empty from the start. This is a valid SSE stream that will just send [DONE].
-            tracing::debug!("Input stream for context {} was empty. Proceeding with empty SSE stream.", context.id());
+            // TODO: Simplify, there should be no empty stream. 
+            tracing::warn!("Input stream for context {} was empty. Proceeding with empty SSE stream.", context.id());
             tokio::spawn(async move {
                 // inflight is moved here
                 if !tx.is_closed() { // Check if client is still there
                     if tx.send(Ok(Event::default().data("[DONE]"))).await.is_ok() {
-                        inflight.mark_ok();
+                        inflight.mark_streaming_error();
                     } else {
                         tracing::trace!("SSE client disconnected (before [DONE] for empty stream) for context: {}.", context.id());
                         context.stop_generating(); // Ensure cleanup if client disconnected
@@ -514,11 +514,6 @@ async fn monitor_for_disconnects(
             Ok(ReceiverStream::new(rx))
         }
         Some(Err(initial_err)) => {
-            tracing::warn!(
-                "Initial event in stream for context {} resulted in an error: {}. Aborting SSE setup.",
-                context.id(),
-                initial_err
-            );
             context.stop_generating();
 
             // Check if the source of axum::Error is an HttpError
@@ -526,13 +521,24 @@ async fn monitor_for_disconnects(
                 if let Some(http_err_ref) = source.downcast_ref::<HttpError>() {
                     // HttpError found as source. Construct an owned HttpError 
                     // and use ErrorResponse::from_http_error.
+                    inflight.mark_downstream_http_error();
                     let owned_http_err = HttpError {
                         code: http_err_ref.code,
                         message: http_err_ref.message.clone(), // String needs clone
                     };
+                    tracing::info!(
+                        "Returining HTTP error {}: {}",
+                        owned_http_err.code,
+                        owned_http_err.message
+                    );
                     return Err(ErrorResponse::from_http_error(owned_http_err));
                 }
             }
+            tracing::warn!(
+                "Initial event in stream for context {} resulted in an error: {}. Aborting SSE setup.",
+                context.id(),
+                initial_err
+            );
             
             // Fallback: if initial_err was not an axum::Error wrapping an HttpError,
             // or if HttpError was not found as its source.
@@ -573,7 +579,7 @@ async fn monitor_for_disconnects(
                             // will typically terminate the connection.
                             tracing::warn!("Error in ongoing SSE event stream for context {}: {}. Propagating to client.", context.id(), err);
                             let send_err_result = tx.send(Err(err)).await;
-
+                            inflight.mark_streaming_error(); 
                             context.stop_generating(); // Tell engine to stop.
 
                             if send_err_result.is_err() {

@@ -42,6 +42,12 @@ pub const REQUEST_STATUS_429: &str = "429";
 /// Value for the `status` label in the request counter if the request failed
 pub const REQUEST_STATUS_ERROR: &str = "error";
 
+// Value for sending a sse-event error during the streaming
+pub const REQUEST_STATUS_STREAMING_ERROR: &str = "streaming_error";
+
+// Value for initial invalidation via HTTPError from processor
+pub const REQUEST_STATUS_DOWNSTREAM_HTTP_ERROR: &str = "downstream_http_error";
+
 /// Partial value for the `type` label in the request counter for streaming requests
 pub const REQUEST_TYPE_STREAM: &str = "stream";
 
@@ -95,8 +101,15 @@ pub enum RequestType {
 /// Status
 pub enum Status {
     Success,
+    // client side dropped
     ClientDrop,
+    // rate limited
     TooManyRequests,
+    // HTTP Error
+    DownstreamHTTPError,
+    // client side error
+    StreamingError,
+    // general error
     Error,
 }
 
@@ -365,6 +378,14 @@ impl InflightGuard {
         self.status = Status::TooManyRequests;
     }
 
+    pub(crate) fn mark_streaming_error(&mut self) {
+        self.status = Status::StreamingError;
+    }
+
+    pub(crate) fn mark_downstream_http_error(&mut self) {
+        self.status = Status::DownstreamHTTPError;
+    }
+
     pub(crate) fn mark_client_drop(&mut self) {
         self.status = Status::ClientDrop;
     }
@@ -484,7 +505,9 @@ impl Status {
             Status::Success => REQUEST_STATUS_SUCCESS,
             Status::ClientDrop => REQUEST_STATUS_CLIENT_DROP,
             Status::TooManyRequests => REQUEST_STATUS_429,
+            Status::DownstreamHTTPError => REQUEST_STATUS_ERROR,
             Status::Error => REQUEST_STATUS_ERROR,
+            Status::StreamingError => REQUEST_STATUS_STREAMING_ERROR,
         }
     }
 }
