@@ -32,7 +32,7 @@ RUN rm -rf /workspace/sglang \
     && pushd /workspace \
     && git clone https://github.com/sgl-project/sglang \
     && cd sglang \
-    && git checkout 44ce77ddcce2132cc0fff129d6aa5c9201ae3570 \
+    && git checkout d537551c20b3b51a5084651b242d404f0e5af5a7 \
     && pip3 install -e "python[all]" \
     && popd
 
