@@ -86,7 +86,7 @@ impl TcpClient {
                 info.stream_type
             ));
         }
-
+        let context_writer = context.clone();
         if info.context != context.id() {
             return Err(error!(
                 "Invalid context; TcpClient requires the context to be {:?}; however {:?} was passed",
@@ -138,7 +138,7 @@ impl TcpClient {
         // forwards the bytes send from this stream to the transport layer; hold the alive_rx half of the oneshot channel
 
         let writer_task = tokio::spawn(handle_writer(framed_writer, bytes_rx, alive_rx, context));
-
+        
         tokio::spawn(async move {
             // await both tasks
             let (reader, writer) = tokio::join!(reader_task, writer_task);
@@ -150,7 +150,12 @@ impl TcpClient {
                     let writer = match writer {
                         Ok(writer) => writer.into_inner(),
                         Err(e) => {
-                            tracing::error!("failed to join writer task: {:?}", e);
+                            if context_writer.is_stopped() {
+                                tracing::debug!("writer task context was stopped, stream will be closed.");
+                            } else {
+                                tracing::error!("failed to join writer task: {:?} - issue a `stop_generating for context` {}", e, context_clone.id());
+                                context_writer.stop_generating();
+                            }
                             return Err(e);
                         }
                     };
