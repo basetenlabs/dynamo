@@ -18,16 +18,16 @@ use std::sync::Arc;
 use pyo3::prelude::*;
 
 use crate::{engine::*, to_pyerr, CancellationToken};
-use tracing::info;
 pub use dynamo_llm::http::service::{error as http_error, service_v2};
+use tracing::info;
 
+use dynamo_engine_python::HttpError;
 pub use dynamo_runtime::{
     error,
     pipeline::{async_trait, AsyncEngine, Data, ManyOut, SingleIn},
     protocols::annotated::Annotated,
     Error, Result,
 };
-use dynamo_engine_python::HttpError;
 
 #[pyclass]
 pub struct HttpService {
@@ -95,8 +95,6 @@ impl HttpService {
     }
 }
 
-
-
 #[pyclass]
 #[derive(Clone)]
 pub struct HttpAsyncEngine(pub PythonAsyncEngine);
@@ -147,7 +145,10 @@ where
                             .into_value(py)
                             .extract::<PyRef<HttpError>>(py)
                         {
-                            info!("Raising HttpError {}: {}", http_error_instance.code, http_error_instance.message);
+                            info!(
+                                "Raising HttpError {}: {}",
+                                http_error_instance.code, http_error_instance.message
+                            );
                             Err(http_error::HttpError {
                                 code: http_error_instance.code,
                                 message: http_error_instance.message.clone(),

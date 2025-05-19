@@ -1,9 +1,9 @@
-use pyo3::prelude::*;
-use pyo3::exceptions::PyRuntimeError;
-use serde::{Deserialize, Serialize};
-use chrono::Utc;
 use super::*;
+use chrono::Utc;
 use llm_rs::billing::{BillingEvent, BillingPublisher};
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 #[pyclass]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +20,14 @@ pub struct PyBillingEvent {
 impl PyBillingEvent {
     #[pyo3(signature = (output_tokens, input_tokens, organization_id, request_id, billing_model_version, model_name=None))]
     #[new]
-    pub fn new(output_tokens: i32, input_tokens: i32, organization_id: String, request_id: String, billing_model_version: String, model_name: Option<String>) -> Self {
+    pub fn new(
+        output_tokens: i32,
+        input_tokens: i32,
+        organization_id: String,
+        request_id: String,
+        billing_model_version: String,
+        model_name: Option<String>,
+    ) -> Self {
         Self {
             output_tokens,
             input_tokens,

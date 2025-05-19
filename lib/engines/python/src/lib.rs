@@ -111,6 +111,16 @@ pub async fn make_token_engine(
     Ok(engine)
 }
 
+fn sanitize_error(msg: String) -> String {
+    // Remove any non-ASCII characters from the error message
+    // remove all /n and /r
+    msg.replace('\n', " ")
+        .replace('\r', " ")
+        .chars()
+        .filter(|&c| c.is_ascii() || c == ' ')
+        .collect::<String>()
+}
+
 /// Python Exception for HTTP errors
 #[pyclass(extends=PyException)]
 #[derive(Clone, Serialize, Deserialize)]
@@ -122,11 +132,12 @@ pub struct HttpError {
 #[pymethods]
 impl HttpError {
     #[new]
-    pub fn new(code: u16, message: String) -> Self {
+    pub fn new(code: u16, message: String) -> PyResult<Self> {
         if code < 400 || code > 599 {
-            panic!("Invalid HTTP error code: {}", code);
+            return Err(pyo3::exceptions::PyValueError::new_err("code must be between 400 and 599"));
         }
-        HttpError { code, message }
+        let message: String = sanitize_error(message);
+        Ok(HttpError { code, message })
     }
 
     #[getter]
@@ -385,14 +396,17 @@ where
                                 // todo: add task-local context to the python async generator
                                 ctx.stop_generating();
                                 let msg = format!("critical error: invalid response object from python async generator; application-logic-mismatch: {}", e);
+                                let msg = sanitize_error(msg);
                                 Annotated::from_error(msg)
                             }
                             ResponseProcessingError::PythonException(e) => {
                                 let msg = format!("a python exception was caught while processing the async generator: {}", e);
+                                let msg = sanitize_error(msg);
                                 Annotated::from_error(msg)
                             }
                             ResponseProcessingError::OffloadError(e) => {
                                 let msg = format!("critical error: failed to offload the python async generator to a new thread: {}", e);
+                                let msg = sanitize_error(msg);
                                 Annotated::from_error(msg)
                             }
                             ResponseProcessingError::HttpException { code, message } => {
