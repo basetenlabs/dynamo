@@ -24,13 +24,13 @@ use rs::pipeline::network::Ingress;
 use std::{fmt::Display, sync::Arc};
 use tokio::sync::Mutex;
 
+use dynamo_engine_python::HttpError;
 use dynamo_runtime::{
     self as rs, logging,
     pipeline::{AsyncEngineContextProvider, EngineStream, ManyOut, SingleIn},
     protocols::annotated::Annotated as RsAnnotated,
     traits::DistributedRuntimeProvider,
 };
-use dynamo_engine_python::HttpError;
 
 use dynamo_engine_python::PyContext;
 
