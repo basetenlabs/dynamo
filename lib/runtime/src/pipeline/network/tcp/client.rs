@@ -155,7 +155,7 @@ impl TcpClient {
                                     "writer task context was stopped, stream will be closed."
                                 );
                             } else {
-                                tracing::error!("failed to join writer task: {:?} - issue a `stop_generating for context` {}", e, context_clone.id());
+                                tracing::error!("failed to join writer task: {:?} - issue a `stop_generating for context` {}", e, context_writer.id());
                                 context_writer.stop_generating();
                             }
                             return Err(e);
