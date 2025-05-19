@@ -2,7 +2,6 @@ use super::*;
 use chrono::Utc;
 use llm_rs::billing::{BillingEvent, BillingPublisher};
 use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[pyclass]

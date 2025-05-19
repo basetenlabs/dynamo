@@ -161,7 +161,7 @@ impl CtxDropGuard {
 impl Drop for CtxDropGuard {
     fn drop(&mut self) {
         if !self.is_defused {
-            tracing::info!("Dropping context for request_id: {}", self.ctx.id());
+            tracing::info!("Detected user side cancellation for request_id: {}", self.ctx.id());
             self.ctx.stop_generating();
         }
     }
@@ -270,7 +270,7 @@ async fn completions(
 
     // todo - tap the stream and propagate request level metrics
     // note - we might do this as part of the post processing set to make it more generic
-
+    let mut guard = CtxDropGuard::new(ctx.clone());
     if streaming {
         let stream = stream.map(|response| Event::try_from(EventConverter::from(response)));
         let stream = monitor_for_disconnects(stream.boxed(), ctx, inflight).await?;
@@ -280,10 +280,9 @@ async fn completions(
         if let Some(keep_alive) = state.sse_keep_alive {
             sse_stream = sse_stream.keep_alive(KeepAlive::default().interval(keep_alive));
         }
-
+        guard.defuse();
         Ok(sse_stream.into_response())
     } else {
-        let mut guard = CtxDropGuard::new(ctx);
         let response = CompletionResponse::from_annotated_stream(stream.into())
             .await
             .map_err(|e| {

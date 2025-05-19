@@ -22,27 +22,39 @@ import uvloop
 from dynamo.llm import HttpAsyncEngine, HttpService, HttpError
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 
-
 class MockEngine:
     def __init__(self, model_name):
         self.model_name = model_name
         self.counter = 0
 
-    def generate(self, request, py_context):
+    def generate(self, request, py_context):       
+        async def is_canceled(id):
+            id = id[-4:]
+            print(f"checking for cancellation {id}")
+            while not await py_context.stopped(2):
+                print(f"request not canceled {id}")
+                await asyncio.sleep(0.01)
+            if py_context.is_stopped():
+                print(f"request {id} got canceled! ")
+            else:
+                print(f"request {id} not canceled, surprise..")
+            return 
+            
         self.counter += 1
-       
         id = f"chat-{uuid.uuid4()}"
         created = int(time.time())
         model = self.model_name
         print(f"{created} | Received request: {request}")
 
         async def generator():
-            num_chunks = 5
+            if self.counter % 3 == 0 and i > 1:
+                raise HttpError(415 + self.counter, 'bad luck, your schema got rejected during streaming\n')
+            cancel_task = asyncio.create_task(is_canceled(id))
+            await asyncio.sleep(5)
+            num_chunks = 25
             # if self.counter % 2 == 0:
             #     raise HttpError(415 + self.counter, 'bad luck, your schema got rejected')
             for i in range(num_chunks):
-                if self.counter % 3 == 0 and i > 1:
-                    raise HttpError(415 + self.counter, 'bad luck, your schema got rejected during streaming\n')
                 mock_content = f"chunk{i}"
                 finish_reason = "stop" if (i == num_chunks - 1) else None
                 chunk = {
@@ -60,6 +72,8 @@ class MockEngine:
                     ],
                 }
                 yield chunk
+            cancel_task.cancel()
+            print(f"request {id} done")
 
         return generator()
 
