@@ -189,7 +189,12 @@ impl TcpClient {
                     Ok(())
                 }
                 _ => {
-                    tracing::error!("failed to join reader and writer tasks");
+                    if context_writer.is_stopped() {
+                        tracing::debug!("failed to join reader and writer tasks.");
+                    } else {
+                        tracing::error!("failed to join reader and writer tasks: - issue a `stop_generating for context` {}", context_writer.id());
+                        context_writer.stop_generating();
+                    }
                     anyhow::bail!("failed to join reader and writer tasks");
                 }
             }
