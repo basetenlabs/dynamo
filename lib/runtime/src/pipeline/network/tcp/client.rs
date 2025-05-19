@@ -86,7 +86,7 @@ impl TcpClient {
                 info.stream_type
             ));
         }
-
+        let context_writer = context.clone();
         if info.context != context.id() {
             return Err(error!(
                 "Invalid context; TcpClient requires the context to be {:?}; however {:?} was passed",
@@ -150,7 +150,14 @@ impl TcpClient {
                     let writer = match writer {
                         Ok(writer) => writer.into_inner(),
                         Err(e) => {
-                            tracing::error!("failed to join writer task: {:?}", e);
+                            if context_writer.is_stopped() {
+                                tracing::debug!(
+                                    "writer task context was stopped, stream will be closed."
+                                );
+                            } else {
+                                tracing::error!("failed to join writer task: {:?} - issue a `stop_generating for context` {}", e, context_writer.id());
+                                context_writer.stop_generating();
+                            }
                             return Err(e);
                         }
                     };
@@ -182,7 +189,12 @@ impl TcpClient {
                     Ok(())
                 }
                 _ => {
-                    tracing::error!("failed to join reader and writer tasks");
+                    if context_writer.is_stopped() {
+                        tracing::debug!("failed to join reader and writer tasks.");
+                    } else {
+                        tracing::error!("failed to join reader and writer tasks: - issue a `stop_generating for context` {}", context_writer.id());
+                        context_writer.stop_generating();
+                    }
                     anyhow::bail!("failed to join reader and writer tasks");
                 }
             }
