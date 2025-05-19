@@ -134,7 +134,9 @@ impl HttpError {
     #[new]
     pub fn new(code: u16, message: String) -> PyResult<Self> {
         if code < 400 || code > 599 {
-            return Err(pyo3::exceptions::PyValueError::new_err("code must be between 400 and 599"));
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "code must be between 400 and 599",
+            ));
         }
         let message: String = sanitize_error(message);
         Ok(HttpError { code, message })
@@ -410,10 +412,7 @@ where
                                 Annotated::from_error(msg)
                             }
                             ResponseProcessingError::HttpException { code, message } => {
-                                let msg = format!(
-                                    "HTTPExceptionDetected: {}: {}",
-                                    code, message
-                                );
+                                let msg = format!("HTTPExceptionDetected: {}: {}", code, message);
                                 let serde_http = serde_json::to_string(
                                     &HttpError {
                                         code: *code,

@@ -299,7 +299,7 @@ async fn completions(
                         code: 400,
                         message: e.to_string(),
                     })
-                }  else {
+                } else {
                     ErrorResponse::internal_server_error(&format!(
                         "Failed to fold chat completions stream: {}",
                         e
@@ -416,7 +416,7 @@ async fn chat_completions(
                         code: 400,
                         message: e.to_string(),
                     })
-                }  else {
+                } else {
                     ErrorResponse::internal_server_error(&format!(
                         "Failed to fold chat completions stream: {}",
                         e
