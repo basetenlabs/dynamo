@@ -17,8 +17,6 @@ async def generate(request, context, *args): # generate(request, name: str, is_s
     for response in reponses:
         if context.is_stopped():
             print("request got canceled, canceling child context")
-            context.child_stop_generating()
-            print("child context canceled")
             break
         yield response
         await asyncio.sleep(0.1)

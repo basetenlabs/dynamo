@@ -191,20 +191,15 @@ impl PyContext {
         let stop = self.inner.is_stopped();
         if stop {
             // stop all child_context
-            self.child_stop_generating();
+            for child in &self.child_contexts {
+                child.stop_generating();
+            }
         }
         stop
     }
 
     fn stop_generating(&self) {
         self.inner.stop_generating();
-    }
-
-    // deprecated, just call `is_stopped()` or `await stopped()`
-    fn child_stop_generating(&self) {
-        for child in &self.child_contexts {
-            child.stop_generating();
-        }
     }
 
     fn id(&self) -> &str {
