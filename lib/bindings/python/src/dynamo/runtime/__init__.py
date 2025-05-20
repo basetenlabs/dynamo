@@ -80,7 +80,7 @@ def dynamo_endpoint(
                     else:
                         raise ValueError(f"Invalid request: {args[pos]}, {args}")
             except ValidationError as e:
-                raise HttpError(400, f"Invalid request: {e}")
+                raise HttpError(400, str(e.json()))
 
             # Wrap the async generator
             async for item in func(*args_list, **kwargs):
