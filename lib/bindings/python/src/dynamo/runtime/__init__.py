@@ -31,6 +31,7 @@ from dynamo._core import ModelDeploymentCard as ModelDeploymentCard
 from dynamo._core import OAIChatPreprocessor as OAIChatPreprocessor
 from dynamo._core import HttpError
 
+
 def dynamo_worker(static=False):
     def decorator(func):
         @wraps(func)
@@ -83,7 +84,7 @@ def dynamo_endpoint(
                 errors = exc.errors()
                 message = "Invalid request"
                 if len(errors) > 0:
-                    message = f"{errors[0]['loc'][0]}: {errors[0]['msg']}"
+                    message = ", ".join(format_message(error) for error in errors)
                 raise HttpError(400, message)
 
             # Wrap the async generator
@@ -98,3 +99,11 @@ def dynamo_endpoint(
         return wrapper
 
     return decorator
+
+
+def format_message(error: dict[str, Any]) -> str:
+    """Format Pydantic error message for display."""
+    location = ".".join(error["loc"])
+    input = error["input"]
+    msg = error["msg"]
+    return f"{location} ({input}): {msg}"
