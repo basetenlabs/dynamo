@@ -147,10 +147,7 @@ struct CtxDropGuard {
 
 impl CtxDropGuard {
     fn new(ctx: Arc<dyn AsyncEngineContext>) -> Self {
-        CtxDropGuard {
-            ctx,
-            verbose: true,
-        }
+        CtxDropGuard { ctx, verbose: true }
     }
     // mark as surpress output + take ownership of the context
     fn suppress_output_move(&mut self) {
@@ -162,7 +159,10 @@ impl Drop for CtxDropGuard {
     fn drop(&mut self) {
         self.ctx.stop_generating();
         if self.verbose {
-            tracing::info!("Detected user side cancellation for request_id: {}", self.ctx.id());
+            tracing::info!(
+                "Detected user side cancellation for request_id: {}",
+                self.ctx.id()
+            );
         }
     }
 }

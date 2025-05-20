@@ -13,10 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ffi::CStr;
-use std::{env, path::Path, sync::Arc};
 use anyhow::Context as anyhow_context;
 use dynamo_runtime::pipeline::error as pipeline_error;
+use std::ffi::CStr;
+use std::{env, path::Path, sync::Arc};
 
 pub use dynamo_runtime::{
     error,

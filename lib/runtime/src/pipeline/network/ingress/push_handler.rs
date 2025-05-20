@@ -102,8 +102,12 @@ where
             let resp_bytes = serde_json::to_vec(&resp)
                 .expect("fatal error: invalid response object - this should never happen");
             if (publisher.send(resp_bytes.into()).await).is_err() {
-                tracing::error!("Failed to publish response for stream {}", context.id());
-                context.stop_generating();
+                if context.is_stopped() {
+                    tracing::debug!("Response stream is stopped");
+                } else {
+                    tracing::error!("Failed to publish response for stream {}", context.id());
+                    context.stop_generating();
+                }
                 break;
             }
         }
