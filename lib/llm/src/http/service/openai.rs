@@ -142,27 +142,27 @@ impl From<HttpError> for ErrorResponse {
 // stop_generating
 struct CtxDropGuard {
     ctx: Arc<dyn AsyncEngineContext>,
-    is_defused: bool,
+    verbose: bool,
 }
 
 impl CtxDropGuard {
     fn new(ctx: Arc<dyn AsyncEngineContext>) -> Self {
         CtxDropGuard {
             ctx,
-            is_defused: false,
+            verbose: true,
         }
     }
-
-    fn defuse(&mut self) {
-        self.is_defused = true;
+    // mark as surpress output + take ownership of the context
+    fn suppress_output_move(&mut self) {
+        self.verbose = false;
     }
 }
 
 impl Drop for CtxDropGuard {
     fn drop(&mut self) {
-        if !self.is_defused {
-            tracing::info!("Dropping context for request_id: {}", self.ctx.id());
-            self.ctx.stop_generating();
+        self.ctx.stop_generating();
+        if self.verbose {
+            tracing::info!("Detected user side cancellation for request_id: {}", self.ctx.id());
         }
     }
 }
@@ -270,9 +270,12 @@ async fn completions(
 
     // todo - tap the stream and propagate request level metrics
     // note - we might do this as part of the post processing set to make it more generic
-
+    let mut guard = CtxDropGuard::new(ctx.clone());
     if streaming {
-        let stream = stream.map(|response| Event::try_from(EventConverter::from(response)));
+        let stream = stream.map(move |response| {
+            guard.suppress_output_move(); // ensures that the guard is moved into the stream
+            Event::try_from(EventConverter::from(response))
+        });
         let stream = monitor_for_disconnects(stream.boxed(), ctx, inflight).await?;
 
         let mut sse_stream = Sse::new(stream);
@@ -280,10 +283,8 @@ async fn completions(
         if let Some(keep_alive) = state.sse_keep_alive {
             sse_stream = sse_stream.keep_alive(KeepAlive::default().interval(keep_alive));
         }
-
         Ok(sse_stream.into_response())
     } else {
-        let mut guard = CtxDropGuard::new(ctx);
         let response = CompletionResponse::from_annotated_stream(stream.into())
             .await
             .map_err(|e| {
@@ -306,7 +307,7 @@ async fn completions(
                     ))
                 }
             })?;
-        guard.defuse();
+        guard.suppress_output_move();
         inflight.mark_ok();
         Ok(Json(response).into_response())
     }
@@ -387,9 +388,12 @@ async fn chat_completions(
 
     // todo - tap the stream and propagate request level metrics
     // note - we might do this as part of the post processing set to make it more generic
-
+    let mut guard = CtxDropGuard::new(ctx.clone());
     if streaming {
-        let stream = stream.map(|response| Event::try_from(EventConverter::from(response)));
+        let stream = stream.map(move |response| {
+            guard.suppress_output_move(); // ensures that the guard is moved into the stream
+            Event::try_from(EventConverter::from(response))
+        });
         let stream = monitor_for_disconnects(stream.boxed(), ctx, inflight).await?;
 
         let mut sse_stream = Sse::new(stream);
@@ -397,10 +401,8 @@ async fn chat_completions(
         if let Some(keep_alive) = state.sse_keep_alive {
             sse_stream = sse_stream.keep_alive(KeepAlive::default().interval(keep_alive));
         }
-
         Ok(sse_stream.into_response())
     } else {
-        let mut guard = CtxDropGuard::new(ctx);
         let response = NvCreateChatCompletionResponse::from_annotated_stream(stream.into())
             .await
             .map_err(|e| {
@@ -423,7 +425,7 @@ async fn chat_completions(
                     ))
                 }
             })?;
-        guard.defuse();
+        guard.suppress_output_move();
         inflight.mark_ok();
         Ok(Json(response).into_response())
     }

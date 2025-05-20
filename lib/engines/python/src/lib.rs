@@ -15,7 +15,6 @@
 
 use std::ffi::CStr;
 use std::{env, path::Path, sync::Arc};
-
 use anyhow::Context as anyhow_context;
 use dynamo_runtime::pipeline::error as pipeline_error;
 
@@ -36,6 +35,7 @@ use pythonize::{depythonize, pythonize};
 pub use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot::Sender;
+use tokio::time::{timeout, Duration};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use dynamo_llm::backend::ExecutionContext;
@@ -186,24 +186,50 @@ impl PyContext {
 
 #[pymethods]
 impl PyContext {
-    // Remove #[new] to avoid requiring conversion of Arc<Controller> from Python.
+    // sync method of `await stopped()`
     fn is_stopped(&self) -> bool {
-        self.inner.is_stopped()
+        let stop = self.inner.is_stopped();
+        if stop {
+            // stop all child_context
+            for child in &self.child_contexts {
+                child.stop_generating();
+            }
+        }
+        stop
     }
 
     fn stop_generating(&self) {
         self.inner.stop_generating();
-        // stop all child_context
-    }
-
-    fn child_stop_generating(&self) {
-        for child in &self.child_contexts {
-            child.stop_generating();
-        }
     }
 
     fn id(&self) -> &str {
         &self.inner.id()
+    }
+
+    fn stopped<'a>(&self, py: Python<'a>, wait_for: u16) -> PyResult<Bound<'a, PyAny>> {
+        let inner = self.inner.clone();
+        let child_contexts = self.child_contexts.clone();
+        // allow wait_for to be 360 seconds max
+        if wait_for > 360 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "wait_for must be less than 360 seconds to allow for async task to cycle.",
+            ));
+        }
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            // Wait up to `wait_for` seconds for inner.stopped() to complete.
+            let _ = timeout(Duration::from_secs(wait_for as u64), inner.stopped()).await;
+
+            let stop = inner.is_stopped();
+            if !stop {
+                return Ok(false);
+            }
+            for child in child_contexts {
+                child.stop_generating();
+            }
+            // Return a bool to the Python side: true if completed in time, false if timed out.
+            Ok(true)
+        })
     }
 }
 

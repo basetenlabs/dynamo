@@ -22,44 +22,105 @@ import uvloop
 from dynamo.llm import HttpAsyncEngine, HttpService, HttpError
 from dynamo.runtime import DistributedRuntime, dynamo_worker
 
+class CancellationWatcher:
+    """watches and propagates cancellation to the engine."""
+    def __init__(self, py_context):
+        self.py_context = py_context
+        self.monitoring_task = None
+        self._is_stopped = py_context.is_stopped()
+        self._registered_callback = []
+        self._callback_lock = asyncio.Lock()
+
+    async def _monitor_loop(self):
+        # This method replicates the behavior of the original is_canceled function
+        try:
+            # Polls every 2 seconds until the request is stopped or the task is cancelled
+            while True:
+                self._is_stopped = await self.py_context.stopped(15)    
+                if self._is_stopped:
+                    async with self._callback_lock:
+                        for callback in self._registered_callback:
+                            try:
+                                callback()
+                            except Exception as e:
+                                # Log the error from the callback
+                                print(f"Error in callback for {self.id()}: {e}")
+                    break
+                        
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            # Log other unexpected errors in the monitoring loop
+            print(f"Error in cancellation _monitor_loop for {self.id()}: {e}")
+            # Depending on policy, you might want to re-raise e or handle it
+
+    async def __aenter__(self):
+        self.monitoring_task = asyncio.create_task(self._monitor_loop())
+        return self # Allows using 'as watcher_instance' if needed, though not used here
+    
+    def is_stopped(self):
+        return self._is_stopped
+    
+    async def register_callback(self, callback):
+        """Register a callback to be called when the request is stopped."""
+        self._registered_callback.append(callback)
+        async with self._callback_lock:
+            if self._is_stopped:
+                # If already stopped, call the callback immediately
+                callback()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.monitoring_task:
+            if not self.monitoring_task.done():
+                self.monitoring_task.cancel()
+
 
 class MockEngine:
     def __init__(self, model_name):
         self.model_name = model_name
         self.counter = 0
 
-    def generate(self, request, py_context):
+    def generate(self, request, py_context):                   
         self.counter += 1
-       
         id = f"chat-{uuid.uuid4()}"
         created = int(time.time())
         model = self.model_name
         print(f"{created} | Received request: {request}")
 
         async def generator():
-            num_chunks = 5
-            # if self.counter % 2 == 0:
-            #     raise HttpError(415 + self.counter, 'bad luck, your schema got rejected')
-            for i in range(num_chunks):
-                if self.counter % 3 == 0 and i > 1:
+            
+            async with CancellationWatcher(py_context) as cancel_task:
+                if self.counter % 3 == 0:
                     raise HttpError(415 + self.counter, 'bad luck, your schema got rejected during streaming\n')
-                mock_content = f"chunk{i}"
-                finish_reason = "stop" if (i == num_chunks - 1) else None
-                chunk = {
-                    "id": id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": i,
-                            "delta": {"role": "assistant", "content": mock_content},
-                            "logprobs": None,
-                            "finish_reason": finish_reason,
-                        }
-                    ],
-                }
-                yield chunk
+                def callback():
+                    print(f"detected cancellation in callback for {id}")
+                
+                await cancel_task.register_callback(callback)
+                await asyncio.sleep(5)
+                num_chunks = 10
+                
+                for i in range(num_chunks):
+                    if cancel_task.is_stopped():
+                        print(f"detected cancellation in generator for {id}")
+                        break
+                    mock_content = f"chunk{i}"
+                    finish_reason = "stop" if (i == num_chunks - 1) else None
+                    chunk = {
+                        "id": id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": i,
+                                "delta": {"role": "assistant", "content": mock_content},
+                                "logprobs": None,
+                                "finish_reason": finish_reason,
+                            }
+                        ],
+                    }
+                    await asyncio.sleep(1)
+                    yield chunk
 
         return generator()
 
