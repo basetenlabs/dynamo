@@ -152,8 +152,8 @@ impl CtxDropGuard {
             verbose: true,
         }
     }
-
-    fn not_print_drop(&mut self) {
+    // mark as surpress output + take ownership of the context
+    fn suppress_output_move(&mut self) {
         self.verbose = false;
     }
 }
@@ -273,7 +273,7 @@ async fn completions(
     let mut guard = CtxDropGuard::new(ctx.clone());
     if streaming {
         let stream = stream.map(move |response| {
-            guard.not_print_drop(); // ensures that the guard is moved into the stream
+            guard.suppress_output_move(); // ensures that the guard is moved into the stream
             Event::try_from(EventConverter::from(response))
         });
         let stream = monitor_for_disconnects(stream.boxed(), ctx, inflight).await?;
@@ -307,7 +307,7 @@ async fn completions(
                     ))
                 }
             })?;
-        guard.not_print_drop();
+        guard.suppress_output_move();
         inflight.mark_ok();
         Ok(Json(response).into_response())
     }
@@ -391,7 +391,7 @@ async fn chat_completions(
     let mut guard = CtxDropGuard::new(ctx.clone());
     if streaming {
         let stream = stream.map(move |response| {
-            guard.not_print_drop(); // ensures that the guard is moved into the stream
+            guard.suppress_output_move(); // ensures that the guard is moved into the stream
             Event::try_from(EventConverter::from(response))
         });
         let stream = monitor_for_disconnects(stream.boxed(), ctx, inflight).await?;
@@ -425,7 +425,7 @@ async fn chat_completions(
                     ))
                 }
             })?;
-        guard.not_print_drop();
+        guard.suppress_output_move();
         inflight.mark_ok();
         Ok(Json(response).into_response())
     }
