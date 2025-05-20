@@ -28,18 +28,18 @@ class CancellationWatcher:
         self.py_context = py_context
         self.monitoring_task = None
         self._is_stopped = py_context.is_stopped()
-        self._registered_callback = []
+        self._registered_callbacks = []
         self._callback_lock = asyncio.Lock()
 
     async def _monitor_loop(self):
         # This method replicates the behavior of the original is_canceled function
         try:
-            # Polls every 2 seconds until the request is stopped or the task is cancelled
+            # Polls every 15 seconds until the request is stopped or the task is cancelled
             while True:
                 self._is_stopped = await self.py_context.stopped(15)    
                 if self._is_stopped:
                     async with self._callback_lock:
-                        for callback in self._registered_callback:
+                        for callback in self._registered_callbacks:
                             try:
                                 callback()
                             except Exception as e:
@@ -63,7 +63,7 @@ class CancellationWatcher:
     
     async def register_callback(self, callback):
         """Register a callback to be called when the request is stopped."""
-        self._registered_callback.append(callback)
+        self._registered_callbacks.append(callback)
         async with self._callback_lock:
             if self._is_stopped:
                 # If already stopped, call the callback immediately
