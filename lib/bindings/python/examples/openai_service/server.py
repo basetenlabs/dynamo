@@ -33,7 +33,6 @@ class MockEngine:
             print(f"checking for cancellation {id}")
             while not await py_context.stopped(2):
                 print(f"request not canceled {id}")
-                await asyncio.sleep(0.01)
             if py_context.is_stopped():
                 print(f"request {id} got canceled! ")
             else:
@@ -47,33 +46,37 @@ class MockEngine:
         print(f"{created} | Received request: {request}")
 
         async def generator():
-            if self.counter % 3 == 0 and i > 1:
-                raise HttpError(415 + self.counter, 'bad luck, your schema got rejected during streaming\n')
             cancel_task = asyncio.create_task(is_canceled(id))
-            await asyncio.sleep(5)
-            num_chunks = 25
-            # if self.counter % 2 == 0:
-            #     raise HttpError(415 + self.counter, 'bad luck, your schema got rejected')
-            for i in range(num_chunks):
-                mock_content = f"chunk{i}"
-                finish_reason = "stop" if (i == num_chunks - 1) else None
-                chunk = {
-                    "id": id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": i,
-                            "delta": {"role": "assistant", "content": mock_content},
-                            "logprobs": None,
-                            "finish_reason": finish_reason,
-                        }
-                    ],
-                }
-                yield chunk
-            cancel_task.cancel()
-            print(f"request {id} done")
+            try:
+                if self.counter % 3 == 0:
+                    raise HttpError(415 + self.counter, 'bad luck, your schema got rejected during streaming\n')
+                
+                await asyncio.sleep(5)
+                num_chunks = 10
+                # if self.counter % 2 == 0:
+                #     raise HttpError(415 + self.counter, 'bad luck, your schema got rejected')
+                for i in range(num_chunks):
+                    mock_content = f"chunk{i}"
+                    finish_reason = "stop" if (i == num_chunks - 1) else None
+                    chunk = {
+                        "id": id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": i,
+                                "delta": {"role": "assistant", "content": mock_content},
+                                "logprobs": None,
+                                "finish_reason": finish_reason,
+                            }
+                        ],
+                    }
+                    await asyncio.sleep(1)
+                    yield chunk
+            finally:
+                cancel_task.cancel()
+                print(f"request {id} done")
 
         return generator()
 

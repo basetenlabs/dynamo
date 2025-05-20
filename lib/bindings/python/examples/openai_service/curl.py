@@ -64,7 +64,7 @@ headers = {
     "Content-Type": "application/json"
 }
 
-for stream in [False]:
+for stream in [True, False, False, True]:
     print(f"### Stream: {stream}")
     data = {
         "model": "mock_model",
