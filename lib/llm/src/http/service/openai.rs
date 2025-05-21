@@ -20,7 +20,7 @@ use super::{
     RouteDoc,
 };
 use axum::{
-    extract::State,
+    extract::{rejection::JsonRejection, State},
     http::HeaderMap,
     http::StatusCode,
     response::{
@@ -325,8 +325,10 @@ async fn completions(
 async fn chat_completions(
     State(state): State<Arc<DeploymentState>>,
     headers: HeaderMap,
-    Json(request): Json<NvCreateChatCompletionRequest>,
+    payload: Result<Json<NvCreateChatCompletionRequest>, JsonRejection>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let Json(request) = payload.map_err(handle_json_rejection)?;
+
     // return a 503 if the service is not ready
     check_ready(&state)?;
 
@@ -774,6 +776,44 @@ pub fn list_models_router(
         .with_state(state);
 
     (vec![doc_for_custom, doc_for_openai], router)
+}
+
+/// Returns a JSON error response for the given `JsonRejection`.
+fn handle_json_rejection(err: JsonRejection) -> (StatusCode, Json<ErrorResponse>) {
+    use axum::extract::rejection::JsonRejection::*;
+
+    match &err {
+        MissingJsonContentType(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.body_text(),
+            }),
+        ),
+        BytesRejection(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.body_text(),
+            }),
+        ),
+        JsonDataError(e) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: e.body_text(),
+            }),
+        ),
+        JsonSyntaxError(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.body_text(),
+            }),
+        ),
+        _ => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: String::from("Error parsing JSON request"),
+            }),
+        ),
+    }
 }
 
 #[cfg(test)]
