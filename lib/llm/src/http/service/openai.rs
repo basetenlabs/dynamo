@@ -737,7 +737,7 @@ pub fn completions_router(
     let doc = RouteDoc::new(axum::http::Method::POST, &path);
     let router = Router::new()
         .route(&path, post(completions))
-        .layer(DefaultBodyLimit::max(30 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(45 * 1024 * 1024))
         .with_state(state);
     (vec![doc], router)
 }
@@ -752,7 +752,7 @@ pub fn chat_completions_router(
     let doc = RouteDoc::new(axum::http::Method::POST, &path);
     let router = Router::new()
         .route(&path, post(chat_completions))
-        .layer(DefaultBodyLimit::max(30 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(45 * 1024 * 1024))
         .with_state(state);
     (vec![doc], router)
 }
